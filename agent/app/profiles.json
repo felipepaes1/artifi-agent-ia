@@ -1,0 +1,73 @@
+{
+  "pollName": "Olá. Para testar o atendimento, qual segmento você prefere?",
+  "profiles": [
+    {
+      "id": "mariano",
+      "label": "Odontologia",
+      "instructions_path": "assistant_instructions.txt",
+      "response_style": "direct",
+      "temperature": 0.2,
+      "max_tokens": 220,
+      "greeting_name": "Mariano Odontologia",
+      "greeting_message": "tudo bem? Sou a assistente da Mariano Odontologia 🦷\nComo posso te ajudar hoje?",
+      "docs_dir": "../../storage/mariano",
+      "flow_path": "../../storage/mariano/flow.json"
+    },
+    {
+      "id": "ariane",
+      "label": "Estética Capilar",
+      "instructions_path": "assistant_instructions_ariane.txt",
+      "response_style": "preserve",
+      "greeting_name": "Ariane Estevam",
+      "greeting_message": "tudo bem? Sou a assistente da Ariane Estevam 👩🏼‍⚕️\nComo posso te ajudar hoje?",
+      "docs_dir": "../../storage/ariane",
+      "flow_path": "../../storage/ariane/flow.json"
+    },
+    {
+      "id": "mais_vision",
+      "label": "Oftalmologia",
+      "instructions_path": "assistant_instructions_mais_vision.txt",
+      "response_style": "direct",
+      "temperature": 0.2,
+      "max_tokens": 220,
+      "greeting_name": "Mais Vision",
+      "greeting_message": "tudo bem? Sou a Clara ✨, assistente da +Vision Clínica de Olhos, seja bem-vindo!",
+      "docs_dir": "../../storage/mais_vision",
+      "flow_path": "../../storage/mais_vision/flow.json"
+    },
+    {
+      "id": "criolaser",
+      "label": "Estética Tecnológica",
+      "instructions_path": "assistant_instructions_criolaser.txt",
+      "response_style": "direct",
+      "temperature": 0.2,
+      "max_tokens": 220,
+      "greeting_name": "Criolaser",
+      "greeting_message": "tudo bem? Sou a assistente da Criolaser ✨, como posso te ajudar?",
+      "docs_dir": "../../storage/criolaser",
+      "flow_path": "../../storage/criolaser/flow.json"
+    },
+    {
+      "id": "biovita",
+      "label": "Laboratório de análises clínicas",
+      "instructions_path": "assistant_instructions_biovita.txt",
+      "response_style": "preserve",
+      "greeting_name": "Biovita",
+      "greeting_message": "tudo bem? Seja bem-vindo! Sou a assistente do Laboratório Biovita, como posso te ajudar? 🙂",
+      "docs_dir": "../../storage/biovita",
+      "flow_path": "../../storage/biovita/flow.json"
+    },
+    {
+      "id": "odena",
+      "label": "Saúde da mulher",
+      "instructions_path": "assistant_instructions_odena.txt",
+      "response_style": "direct",
+      "temperature": 0.2,
+      "max_tokens": 220,
+      "greeting_name": "Ódena",
+      "greeting_message": "tudo bem? Seja bem-vindo! Sou a assistente da Ódena ✨, como posso te ajudar?",
+      "docs_dir": "../../storage/odena",
+      "flow_path": "../../storage/odena/flow.json"
+    }
+  ]
+}

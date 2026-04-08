@@ -1,0 +1,73 @@
+# Secrets and local env
+.env
+.env.prod
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Logs and build artifacts
+*.log
+.build.log
+logs/
+tmp/
+temp/
+*.pid
+
+# Python cache and virtualenvs
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Old Git backups
+.git-backup*/
+.git.backup*/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Runtime data and mounted volumes
+volumes/
+storage/
+mcp_data/
+waha_data/
+
+# Docker/runtime/certs
+volumes/
+docker/traefik/acme.json
+*.pem
+*.key
+
+# Docker/local overrides
+docker-compose.override.yml
+
+# Archive files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# SQLite and local databases
+*.db
+*.sqlite
+*.sqlite3
+EOF
+
+# Frontend/package managers, if they appear later
+node_modules/
+dist/
+build/

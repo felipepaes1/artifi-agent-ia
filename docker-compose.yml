@@ -1,0 +1,93 @@
+version: "3.8"
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./volumes/n8n_data:/home/node/.n8n
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=${WEBHOOK_URL}
+
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: waha
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./volumes/waha_data:/home/node/.waha
+    restart: unless-stopped
+    environment:
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_API_KEY_PLAIN=${WAHA_API_KEY_PLAIN}
+      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME}
+      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
+      - WHATSAPP_HOOK_URL=${WHATSAPP_HOOK_URL}
+      - WHATSAPP_HOOK_EVENTS=${WHATSAPP_HOOK_EVENTS}
+
+  agent:
+    build:
+      context: ./agent
+    container_name: agent
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL}
+      - GROQ_TEMPERATURE=${GROQ_TEMPERATURE}
+      - GROQ_MAX_TOKENS=${GROQ_MAX_TOKENS}
+      - API_OPENAI_KEY=${API_OPENAI_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - OPENAI_TEMPERATURE=${OPENAI_TEMPERATURE}
+      - OPENAI_MAX_TOKENS=${OPENAI_MAX_TOKENS}
+      - SYSTEM_PROMPT=${SYSTEM_PROMPT}
+      - AGENT_PROMPT_PROFILE=${AGENT_PROMPT_PROFILE}
+      - ALLOW_GROUPS=${ALLOW_GROUPS}
+      - MAX_REPLY_CHARS=${MAX_REPLY_CHARS}
+      - MESSAGE_DELAY_MS=${MESSAGE_DELAY_MS}
+      - SCHEDULE_DELAY_MS=${SCHEDULE_DELAY_MS}
+      - WAHA_BASE_URL=${WAHA_BASE_URL}
+      - WAHA_API_KEY_PLAIN=${WAHA_API_KEY_PLAIN}
+      - WAHA_SESSION=${WAHA_SESSION}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_TABLE=${SUPABASE_TABLE}
+      - SUPABASE_APP=${SUPABASE_APP}
+      - SUPABASE_ENABLED=${SUPABASE_ENABLED}
+      - SUPABASE_SESSION_LIMIT=${SUPABASE_SESSION_LIMIT}
+      - SESSION_MAX_ITEMS=${SESSION_MAX_ITEMS}
+    depends_on:
+      - waha
+
+  mcp:
+    build:
+      context: ./mcp
+    container_name: mcp
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+    environment:
+      - MCP_NAME=${MCP_NAME:-n8n-waha}
+      - MCP_PORT=${MCP_PORT:-8001}
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-http}
+      - HTTP_TIMEOUT=${HTTP_TIMEOUT:-20}
+      - WAHA_BASE_URL=${WAHA_BASE_URL:-http://waha:3000}
+      - WAHA_API_KEY_PLAIN=${WAHA_API_KEY_PLAIN}
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_SESSION=${WAHA_SESSION:-default}
+      - N8N_WEBHOOK_BASE_URL=${N8N_WEBHOOK_BASE_URL:-http://n8n:5678/webhook}
+    depends_on:
+      - waha
+      - n8n

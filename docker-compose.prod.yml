@@ -1,0 +1,173 @@
+services:
+  traefik:
+    image: traefik:v3.6.7
+    container_name: traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/traefik:/letsencrypt
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    networks:
+      - internal
+
+  waha:
+    image: devlikeapro/waha-plus:latest
+    container_name: waha
+    volumes:
+      - ./volumes/waha_data:/home/node/.waha
+    restart: unless-stopped
+    environment:
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_API_KEY_PLAIN=${WAHA_API_KEY_PLAIN}
+      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME}
+      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
+      - WAHA_APPS_ENABLED=${WAHA_APPS_ENABLED:-False}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - WHATSAPP_HOOK_URL=http://agent:8000/webhook/waha
+      - WHATSAPP_HOOK_EVENTS=${WHATSAPP_HOOK_EVENTS}
+    depends_on:
+      - redis
+    networks:
+      - internal
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_PROXY_NETWORK:-n8n-whatsapp-automation_proxy}
+      - traefik.http.routers.waha.rule=Host(`${WAHA_HOST}`)
+      - traefik.http.routers.waha.entrypoints=websecure
+      - traefik.http.routers.waha.tls.certresolver=le
+      - traefik.http.services.waha.loadbalancer.server.port=3000
+
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: agent
+    volumes:
+      - ./storage:/storage
+    restart: unless-stopped
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL}
+      - GROQ_TEMPERATURE=${GROQ_TEMPERATURE}
+      - GROQ_MAX_TOKENS=${GROQ_MAX_TOKENS}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - OPENAI_MAX_TOKENS=${OPENAI_MAX_TOKENS}
+      - SYSTEM_PROMPT=${SYSTEM_PROMPT}
+      - AGENT_PROMPT_PROFILE=${AGENT_PROMPT_PROFILE}
+      - ALLOW_GROUPS=${ALLOW_GROUPS}
+      - MAX_REPLY_CHARS=${MAX_REPLY_CHARS}
+      - MESSAGE_DELAY_MS=${MESSAGE_DELAY_MS:-350}
+      - FIRST_MESSAGE_DELAY_MS=${FIRST_MESSAGE_DELAY_MS:-180}
+      - SCHEDULE_DELAY_MS=${SCHEDULE_DELAY_MS:-350}
+      - USER_MESSAGE_COALESCE_MS=${USER_MESSAGE_COALESCE_MS:-800}
+      - USER_MESSAGE_COALESCE_MAX_MS=${USER_MESSAGE_COALESCE_MAX_MS:-2500}
+      - ARIANE_MESSAGE_DELAY_MS=${ARIANE_MESSAGE_DELAY_MS:-350}
+      - ARIANE_FIRST_MESSAGE_DELAY_MS=${ARIANE_FIRST_MESSAGE_DELAY_MS:-180}
+      - ARIANE_SCHEDULE_DELAY_MS=${ARIANE_SCHEDULE_DELAY_MS:-350}
+      - MESSAGE_SPLIT_TARGET_CHARS=${MESSAGE_SPLIT_TARGET_CHARS:-420}
+      - MESSAGE_SPLIT_MAX_CHARS=${MESSAGE_SPLIT_MAX_CHARS:-720}
+      - PENDING_SIGNAL_TTL_SECONDS=${PENDING_SIGNAL_TTL_SECONDS}
+      - WAHA_BASE_URL=http://waha:3000
+      - WAHA_API_KEY_PLAIN=${WAHA_API_KEY_PLAIN}
+      - WAHA_SESSION=${WAHA_SESSION}
+      - WAHA_TYPING_PREVIEW_MS=${WAHA_TYPING_PREVIEW_MS:-1200}
+      - CHATWOOT_BASE_URL=${CHATWOOT_BASE_URL}
+      - CHATWOOT_ACCOUNT_ID=${CHATWOOT_ACCOUNT_ID}
+      - CHATWOOT_API_ACCESS_TOKEN=${CHATWOOT_API_ACCESS_TOKEN}
+      - CHATWOOT_INBOX_ID=${CHATWOOT_INBOX_ID}
+      - CHATWOOT_INBOX_IDENTIFIER=${CHATWOOT_INBOX_IDENTIFIER}
+      - CHATWOOT_WEBHOOK_SECRET=${CHATWOOT_WEBHOOK_SECRET}
+      - CHATWOOT_STATE_DB=${CHATWOOT_STATE_DB:-chatwoot_state.db}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_TABLE=${SUPABASE_TABLE}
+      - SUPABASE_APP=${SUPABASE_APP}
+      - SUPABASE_ENABLED=${SUPABASE_ENABLED}
+      - SUPABASE_SESSION_LIMIT=${SUPABASE_SESSION_LIMIT}
+      - CRIOLASER_AUDIO_BUCKET=${CRIOLASER_AUDIO_BUCKET}
+      - SESSION_MAX_ITEMS=${SESSION_MAX_ITEMS}
+      - AGENT_SCHEDULING_MCP_URL=${AGENT_SCHEDULING_MCP_URL:-http://mcp:8001/mcp/}
+      - AGENT_VECTOR_STORE_ARIANE=${AGENT_VECTOR_STORE_ARIANE}
+      - AGENT_VECTOR_STORE_MARIANO=${AGENT_VECTOR_STORE_MARIANO}
+      - AGENT_VECTOR_STORE_MAIS_VISION=${AGENT_VECTOR_STORE_MAIS_VISION}
+      - AGENT_VECTOR_STORE_CRIOLASER=${AGENT_VECTOR_STORE_CRIOLASER}
+      - AGENT_VECTOR_STORE_BIOVITA=${AGENT_VECTOR_STORE_BIOVITA}
+      - AGENT_VECTOR_STORE_ODENA=${AGENT_VECTOR_STORE_ODENA}
+    depends_on:
+      - waha
+    networks:
+      - internal
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.agent.rule=Host(`${AGENT_HOST}`)
+      - traefik.http.routers.agent.entrypoints=websecure
+      - traefik.http.routers.agent.tls.certresolver=le
+      - traefik.http.services.agent.loadbalancer.server.port=8000
+
+  mcp:
+    build:
+      context: ./mcp
+    container_name: mcp
+    volumes:
+      - ./volumes/mcp_data:/data
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      - MCP_NAME=${MCP_NAME:-waha-mcp}
+      - MCP_PORT=8001
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-http}
+      - HTTP_TIMEOUT=${HTTP_TIMEOUT:-20}
+      - WAHA_BASE_URL=http://waha:3000
+      - WAHA_API_KEY_PLAIN=${WAHA_API_KEY_PLAIN}
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_SESSION=${WAHA_SESSION:-default}
+      - CALENDAR_PROVIDER=${CALENDAR_PROVIDER:-google_calendar}
+      - CALENDAR_DEFAULT_TIMEZONE=${CALENDAR_DEFAULT_TIMEZONE:-America/Sao_Paulo}
+      - CALENDAR_DEFAULT_ID=${CALENDAR_DEFAULT_ID:-primary}
+      - CALENDAR_DEFAULT_ACCOUNT_ID=${CALENDAR_DEFAULT_ACCOUNT_ID:-default}
+      - CALENDAR_SLOT_INCREMENT_MINUTES=${CALENDAR_SLOT_INCREMENT_MINUTES:-15}
+      - CALENDAR_MAX_SUGGESTED_SLOTS=${CALENDAR_MAX_SUGGESTED_SLOTS:-12}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_OAUTH_REDIRECT_URI=${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8765/oauth2/callback}
+      - GOOGLE_OAUTH_AUTH_URI=${GOOGLE_OAUTH_AUTH_URI:-https://accounts.google.com/o/oauth2/v2/auth}
+      - GOOGLE_OAUTH_TOKEN_URI=${GOOGLE_OAUTH_TOKEN_URI:-https://oauth2.googleapis.com/token}
+      - GOOGLE_CALENDAR_API_BASE_URL=${GOOGLE_CALENDAR_API_BASE_URL:-https://www.googleapis.com/calendar/v3}
+      - GOOGLE_TOKEN_STORE_PATH=${GOOGLE_TOKEN_STORE_PATH:-/data/google_calendar_tokens.json}
+      - GOOGLE_CALENDAR_SCOPES=${GOOGLE_CALENDAR_SCOPES:-https://www.googleapis.com/auth/calendar.events}
+      - GOOGLE_OAUTH_ACCESS_TYPE=${GOOGLE_OAUTH_ACCESS_TYPE:-offline}
+      - GOOGLE_OAUTH_PROMPT=${GOOGLE_OAUTH_PROMPT:-consent}
+      - GOOGLE_OAUTH_INCLUDE_GRANTED_SCOPES=${GOOGLE_OAUTH_INCLUDE_GRANTED_SCOPES:-true}
+    depends_on:
+      - waha
+    networks:
+      - internal
+      - proxy
+
+networks:
+  proxy:
+  internal:
+    internal: true

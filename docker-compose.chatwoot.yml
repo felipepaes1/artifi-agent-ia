@@ -1,0 +1,91 @@
+version: "3.8"
+
+services:
+  chatwoot:
+    image: chatwoot/chatwoot:latest
+    container_name: chatwoot
+    env_file: .env.chatwoot
+    depends_on:
+      chatwoot_postgres:
+        condition: service_healthy
+      chatwoot_redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./volumes/chatwoot_storage:/app/storage
+    environment:
+      - NODE_ENV=production
+      - RAILS_ENV=production
+      - INSTALLATION_ENV=docker
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    networks:
+      - chatwoot_backend
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_PROXY_NETWORK:-n8n-whatsapp-automation_proxy}
+      - traefik.http.routers.chatwoot.rule=Host(`${CHATWOOT_HOST:-chatwoot.artifi.com.br}`)
+      - traefik.http.routers.chatwoot.entrypoints=websecure
+      - traefik.http.routers.chatwoot.tls.certresolver=le
+      - traefik.http.services.chatwoot.loadbalancer.server.port=3000
+    restart: unless-stopped
+
+  chatwoot_worker:
+    image: chatwoot/chatwoot:latest
+    container_name: chatwoot_worker
+    env_file: .env.chatwoot
+    depends_on:
+      chatwoot_postgres:
+        condition: service_healthy
+      chatwoot_redis:
+        condition: service_healthy
+    volumes:
+      - ./volumes/chatwoot_storage:/app/storage
+    environment:
+      - NODE_ENV=production
+      - RAILS_ENV=production
+      - INSTALLATION_ENV=docker
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    networks:
+      - chatwoot_backend
+    restart: unless-stopped
+
+  chatwoot_postgres:
+    image: pgvector/pgvector:pg16
+    container_name: chatwoot_postgres
+    env_file: .env.chatwoot
+    volumes:
+      - ./volumes/chatwoot_postgres:/var/lib/postgresql/data
+    networks:
+      - chatwoot_backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chatwoot_redis:
+    image: redis:alpine
+    container_name: chatwoot_redis
+    env_file: .env.chatwoot
+    volumes:
+      - ./volumes/chatwoot_redis:/data
+    command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    networks:
+      - chatwoot_backend
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+    name: ${TRAEFIK_PROXY_NETWORK:-n8n-whatsapp-automation_proxy}
+  chatwoot_backend:
+    internal: true

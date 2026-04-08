@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teste de Conversa - Agentes</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --text: #1c2434;
+      --muted: #5a6474;
+      --line: #d8deea;
+      --accent: #1f6feb;
+      --assistant: #eef4ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f8faff, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    .app {
+      max-width: 860px;
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto auto;
+      min-height: calc(100vh - 32px);
+    }
+
+    .header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fbff;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .header p {
+      margin: 6px 0 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .settings {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .field input,
+    .field select,
+    .composer textarea {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font: inherit;
+      color: var(--text);
+      background: #fff;
+    }
+
+    .field input:focus,
+    .field select:focus,
+    .composer textarea:focus {
+      outline: 2px solid rgba(31, 111, 235, 0.2);
+      border-color: var(--accent);
+    }
+
+    .settings .actions {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 600;
+    }
+
+    button.secondary {
+      background: #e9effc;
+      color: #254275;
+    }
+
+    #chatLog {
+      padding: 16px 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: #fcfdff;
+    }
+
+    .msg {
+      max-width: min(100%, 700px);
+      padding: 12px;
+      border-radius: 10px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .msg.user {
+      margin-left: auto;
+      border-color: #b8cef6;
+      background: #edf3ff;
+    }
+
+    .msg.assistant {
+      margin-right: auto;
+      background: var(--assistant);
+    }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 12px 20px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+
+    .composer textarea {
+      min-height: 74px;
+      resize: vertical;
+    }
+
+    #status {
+      min-height: 20px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 0 20px 14px;
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        min-height: calc(100vh - 20px);
+      }
+
+      .settings {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <h1>Teste de Conversa com Agentes</h1>
+      <p>Interface local para enviar mensagens ao endpoint <code>/chat</code>.</p>
+    </header>
+
+    <section class="settings">
+      <label class="field">
+        API base
+        <input id="apiBase" value="" placeholder="http://localhost:8000">
+      </label>
+      <label class="field">
+        Sessão
+        <input id="sessionId" value="">
+      </label>
+      <label class="field">
+        Perfil
+        <select id="profileId">
+          <option value="">Automático</option>
+        </select>
+      </label>
+      <div class="actions">
+        <button type="button" class="secondary" id="newSessionBtn">Nova sessão</button>
+        <button type="button" class="secondary" id="clearBtn">Limpar</button>
+      </div>
+    </section>
+
+    <section id="chatLog"></section>
+
+    <form class="composer" id="chatForm">
+      <textarea
+        id="messageInput"
+        placeholder="Digite uma mensagem... (Enter envia, Shift+Enter quebra linha)"
+        required
+      ></textarea>
+      <button type="submit" id="sendBtn">Enviar</button>
+    </form>
+
+    <div id="status"></div>
+  </main>
+
+  <script>
+    const apiBaseInput = document.getElementById("apiBase");
+    const sessionInput = document.getElementById("sessionId");
+    const profileSelect = document.getElementById("profileId");
+    const chatLog = document.getElementById("chatLog");
+    const statusEl = document.getElementById("status");
+    const form = document.getElementById("chatForm");
+    const messageInput = document.getElementById("messageInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const newSessionBtn = document.getElementById("newSessionBtn");
+    const clearBtn = document.getElementById("clearBtn");
+
+    function makeSessionId() {
+      return "local-test-" + Date.now().toString(36);
+    }
+
+    function getApiBase() {
+      const value = apiBaseInput.value.trim();
+      return value || window.location.origin;
+    }
+
+    function setStatus(text, isError = false) {
+      statusEl.textContent = text || "";
+      statusEl.style.color = isError ? "#b42318" : "";
+    }
+
+    function addMessage(role, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = text;
+      chatLog.appendChild(div);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    function resetSession() {
+      sessionInput.value = makeSessionId();
+      chatLog.innerHTML = "";
+      setStatus("Nova sessão criada.");
+    }
+
+    async function loadProfiles() {
+      try {
+        const res = await fetch(getApiBase() + "/chat/profiles");
+        if (!res.ok) {
+          throw new Error("Falha ao carregar perfis");
+        }
+
+        const data = await res.json();
+        const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+        const defaultId = data.default_profile_id || "";
+
+        profileSelect.innerHTML = '<option value="">Automático</option>';
+        for (const profile of profiles) {
+          const id = String(profile.id || "").trim();
+          if (!id) continue;
+          const label = String(profile.label || id);
+          const option = document.createElement("option");
+          option.value = id;
+          option.textContent = label + " (" + id + ")";
+          if (id === defaultId) option.selected = true;
+          profileSelect.appendChild(option);
+        }
+      } catch (err) {
+        setStatus("Não foi possível carregar os perfis automaticamente.", true);
+      }
+    }
+
+    async function sendMessage(message) {
+      const payload = {
+        message,
+        session_id: sessionInput.value.trim() || makeSessionId(),
+      };
+      const selectedProfile = profileSelect.value.trim();
+      if (selectedProfile) {
+        payload.profile_id = selectedProfile;
+      }
+
+      const res = await fetch(getApiBase() + "/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        let detail = "Erro ao chamar /chat";
+        try {
+          const data = await res.json();
+          detail = data.detail || detail;
+        } catch (_) {}
+        throw new Error(detail);
+      }
+
+      return res.json();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const text = messageInput.value.trim();
+      if (!text) return;
+
+      addMessage("user", text);
+      messageInput.value = "";
+      setStatus("Enviando...");
+      sendBtn.disabled = true;
+
+      try {
+        const response = await sendMessage(text);
+        sessionInput.value = response.session_id || sessionInput.value;
+        if (response.profile_id) {
+          profileSelect.value = response.profile_id;
+        }
+        addMessage("assistant", response.reply || "(sem resposta)");
+        setStatus("Resposta recebida.");
+      } catch (err) {
+        setStatus(err.message || "Falha na requisição.", true);
+      } finally {
+        sendBtn.disabled = false;
+        messageInput.focus();
+      }
+    });
+
+    messageInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    newSessionBtn.addEventListener("click", resetSession);
+    clearBtn.addEventListener("click", () => {
+      chatLog.innerHTML = "";
+      setStatus("Histórico limpo.");
+    });
+    apiBaseInput.addEventListener("change", loadProfiles);
+
+    apiBaseInput.value = window.location.origin;
+    resetSession();
+    loadProfiles();
+    messageInput.focus();
+  </script>
+</body>
+</html>

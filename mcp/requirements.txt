@@ -1,0 +1,3 @@
+fastmcp
+httpx
+pydantic>=2,<3
