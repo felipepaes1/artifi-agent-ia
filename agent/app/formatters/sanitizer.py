@@ -1,7 +1,9 @@
+import logging
 import re
 from typing import Optional
 
-from ..config.settings import MAX_REPLY_CHARS, PROMPT_PROFILE
+from ..config.settings import PROMPT_PROFILE
+from ..core.profiles import get_profile_max_reply_chars
 from ..profiles.ariane.formatting import (
     format_ariane_checklists,
     split_ariane_trailing_question_blocks,
@@ -10,21 +12,53 @@ from ..profiles.ariane.rules import matches_ariane_alias
 from ..utils.text import normalize_text, strip_list_prefix
 
 
-def truncate(text: str) -> str:
-    if MAX_REPLY_CHARS <= 0:
+logger = logging.getLogger("agent")
+
+
+def truncate(text: str, profile_id: Optional[str] = None) -> str:
+    max_chars = get_profile_max_reply_chars(profile_id or PROMPT_PROFILE or None)
+    if max_chars <= 0:
         return text
-    return text[:MAX_REPLY_CHARS]
+    return text[:max_chars]
 
 
 def sanitize_plain_text(text: str, profile_id: Optional[str] = None) -> str:
     if not text:
         return text
     cleaned = text.replace("**", "").replace("__", "").replace("`", "")
+    # Remove em-dash and en-dash (travessão) — forbidden by all profiles
+    cleaned = cleaned.replace("\u2014", " -").replace("\u2013", "-")
     if matches_ariane_alias(profile_id or "") or (not profile_id and matches_ariane_alias(PROMPT_PROFILE)):
         sanitized = split_ariane_trailing_question_blocks(format_ariane_checklists(cleaned))
     else:
         sanitized = "\n".join(strip_list_prefix(line) for line in cleaned.splitlines())
-    return sanitize_internal_knowledge_references(sanitized)
+    sanitized = sanitize_internal_knowledge_references(sanitized)
+    sanitized = sanitize_phone_number_requests(sanitized)
+    return sanitized
+
+
+_PHONE_REQUEST_PATTERN = re.compile(
+    r"(?:qual|informe?|me\s+passe?|poderia?\s+(?:me\s+)?(?:passar|informar|enviar))\s+(?:o\s+)?(?:seu\s+)?(?:n[uú]mero|telefone|celular)(?:\s+(?:de\s+)?(?:telefone|celular|whatsapp))?\b",
+    re.IGNORECASE,
+)
+
+
+def sanitize_phone_number_requests(text: str) -> str:
+    """Drop lines where the agent asks the user for their phone number.
+
+    Users are already on WhatsApp, so requesting phone/celular is always wrong.
+    Only narrow patterns are matched to avoid false positives.
+    """
+    if not text:
+        return text
+    kept: list[str] = []
+    for line in text.splitlines():
+        if _PHONE_REQUEST_PATTERN.search(line):
+            logger.warning("Dropped phone-request line from reply: %r", line[:120])
+            continue
+        kept.append(line)
+    result = "\n".join(kept).strip()
+    return result if result else text
 
 
 def sanitize_internal_knowledge_references(text: str) -> str:
@@ -74,6 +108,14 @@ def sanitize_internal_knowledge_references(text: str) -> str:
             r"arquivos?\s+internos?",
             "informações da clínica",
         ),
+        (
+            r"vector\s+store",
+            "informações da clínica",
+        ),
+        (
+            r"(?:na\s+)?(?:minha\s+)?base\s+(?:de\s+dados|de\s+informacoes|de\s+informações)",
+            "nas informações da clínica",
+        ),
     )
     for pattern, replacement in replacements:
         sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
@@ -82,4 +124,3 @@ def sanitize_internal_knowledge_references(text: str) -> str:
     if not sanitized:
         return "Posso te ajudar com as informações da clínica e com o agendamento."
     return sanitized
-

@@ -17,11 +17,13 @@ except Exception:
 from ..booking_flow import BookingFlow, build_prebooking_message, build_proof_received_message
 from ..core.profiles import PROFILE_DEFAULT_ID, PROFILE_FLOWS
 from ..core.state import get_schedule_option_details, get_schedule_options, store_schedule_options
+from .guardrail_service import validate_scheduling_entities
 from ..utils.text import normalize_text
 
 
 CURRENT_CHAT_ID = None
 CURRENT_PROFILE_ID = None
+CURRENT_USER_INPUT = None
 resolve_profile_for_chat = None
 is_ariane_profile = None
 
@@ -47,10 +49,18 @@ WEEKDAY_ALIASES = {
 }
 
 
-def configure_runtime(*, chat_context, profile_context, profile_resolver, ariane_matcher) -> None:
-    global CURRENT_CHAT_ID, CURRENT_PROFILE_ID, resolve_profile_for_chat, is_ariane_profile
+def configure_runtime(
+    *,
+    chat_context,
+    profile_context,
+    user_input_context,
+    profile_resolver,
+    ariane_matcher,
+) -> None:
+    global CURRENT_CHAT_ID, CURRENT_PROFILE_ID, CURRENT_USER_INPUT, resolve_profile_for_chat, is_ariane_profile
     CURRENT_CHAT_ID = chat_context
     CURRENT_PROFILE_ID = profile_context
+    CURRENT_USER_INPUT = user_input_context
     resolve_profile_for_chat = profile_resolver
     is_ariane_profile = ariane_matcher
 
@@ -630,6 +640,21 @@ def build_scheduling_tool():
         if not profile_id:
             profile_id = PROFILE_DEFAULT_ID or ""
         preference_text = " ".join(part for part in (preference, day, notes) if part).strip()
+        current_user_input = CURRENT_USER_INPUT.get("") if CURRENT_USER_INPUT is not None else ""
+        guardrail_text = " ".join(
+            part.strip()
+            for part in (current_user_input, preference_text, option, day)
+            if part and part.strip()
+        ).strip()
+        validation = validate_scheduling_entities(profile_id, guardrail_text)
+        if validation.get("status") == "blocked":
+            return {
+                "status": "blocked",
+                "task": normalized_task,
+                "message": validation.get("message"),
+                "candidate": validation.get("candidate"),
+                "kind": validation.get("kind"),
+            }
 
         if normalized_task in ("get_horarios", "get_slots", "get_availability"):
             if uses_mcp_scheduling(profile_id, chat_id):

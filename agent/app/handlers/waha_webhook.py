@@ -77,6 +77,7 @@ from ..services.conversation_service import (
     reset_session,
     trim_session,
 )
+from ..services.guardrail_service import enforce_scheduling_entity_guardrail
 from ..services.message_service import send_reply as send_reply_impl
 from ..services.message_service import send_text_parts as send_text_parts_impl
 from ..services.routing_service import is_ariane_profile, is_greeting_only, resolve_profile_for_chat, wants_profile_switch
@@ -288,7 +289,10 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
         result = None
         try:
             result = await run_agent(agent, pending_message, session, str(chat_id), profile_id)
-            reply = truncate(sanitize_plain_text(extract_text_from_result(result), profile_id))
+            reply = truncate(
+                sanitize_plain_text(extract_text_from_result(result), profile_id),
+                profile_id,
+            )
         except Exception as exc:
             logger.exception("Agent run failed: %s", exc)
             reply = ""
@@ -296,6 +300,7 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
             log_empty_output_diagnostics(result, "pending_message")
             reply = "Desculpe, nao consegui responder agora."
             reply = inject_fake_schedule(str(chat_id), pending_message, reply, has_scheduling_tool=SCHEDULING_TOOL is not None)
+        reply = enforce_scheduling_entity_guardrail(profile_id, pending_message, reply)
         combined = greeting if not reply else f"{greeting}\n\n{reply}"
         await send_reply(
             str(chat_id),
@@ -470,7 +475,17 @@ def build_waha_router() -> APIRouter:
         if not body:
             return {"ok": True, "ignored": "empty"}
 
-        coalesced = await coalesce_user_message(str(chat_id), body, is_audio)
+        pre_coalesce_profile_id: Optional[str] = None
+        if PROFILE_ROUTING_ENABLED:
+            pre_coalesce_profile_id = (get_profile_state(str(chat_id)).get("profile_id") or "").strip() or None
+        else:
+            pre_coalesce_profile_id = PROMPT_PROFILE or PROFILE_DEFAULT_ID or None
+        coalesced = await coalesce_user_message(
+            str(chat_id),
+            body,
+            is_audio,
+            profile_id=pre_coalesce_profile_id,
+        )
         if coalesced is None:
             return {"ok": True, "queued": True}
         body, is_audio = coalesced
@@ -615,13 +630,17 @@ def build_waha_router() -> APIRouter:
             try:
                 agent = get_agent(profile_id)
                 result = await run_agent(agent, body, session, str(chat_id), profile_id)
-                reply = truncate(sanitize_plain_text(extract_text_from_result(result), profile_id))
+                reply = truncate(
+                    sanitize_plain_text(extract_text_from_result(result), profile_id),
+                    profile_id,
+                )
             except Exception as exc:
                 logger.exception("Agent run failed: %s", exc)
                 reply = ""
             if not reply:
                 log_empty_output_diagnostics(result, "first_turn_after_greeting")
                 reply = "Desculpe, nao consegui responder agora."
+            reply = enforce_scheduling_entity_guardrail(profile_id, body, reply)
             reply = inject_fake_schedule(str(chat_id), body, reply, has_scheduling_tool=SCHEDULING_TOOL is not None)
             combined = f"{greeting}\n\n{reply}"
             await send_reply(
@@ -779,10 +798,14 @@ def build_waha_router() -> APIRouter:
             logger.exception("Agent run failed: %s", exc)
             raise HTTPException(status_code=502, detail="Agent run failed") from exc
 
-        reply = truncate(sanitize_plain_text(extract_text_from_result(result), profile_id))
+        reply = truncate(
+            sanitize_plain_text(extract_text_from_result(result), profile_id),
+            profile_id,
+        )
         if not reply:
             log_empty_output_diagnostics(result, "regular_turn")
             reply = "Desculpe, não consegui responder agora."
+        reply = enforce_scheduling_entity_guardrail(profile_id, body, reply)
         reply = inject_fake_schedule(str(chat_id), body, reply, has_scheduling_tool=SCHEDULING_TOOL is not None)
 
         await send_reply(

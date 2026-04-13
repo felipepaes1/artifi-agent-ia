@@ -17,6 +17,10 @@ from ..config.settings import (
     USER_MESSAGE_COALESCE_MAX_MS,
     USER_MESSAGE_COALESCE_MS,
 )
+from ..core.profiles import (
+    get_profile_user_message_coalesce_max_ms,
+    get_profile_user_message_coalesce_ms,
+)
 from ..formatters.message_formatter import delay_seconds_from_ms
 
 
@@ -448,19 +452,23 @@ def get_pending_lock(chat_id: str) -> Any:
     return lock
 
 
-def coalesce_delay_seconds() -> float:
+def coalesce_delay_seconds(profile_id: Optional[str] = None) -> float:
     return delay_seconds_from_ms(
-        USER_MESSAGE_COALESCE_MS,
+        str(get_profile_user_message_coalesce_ms(profile_id) if profile_id else USER_MESSAGE_COALESCE_MS),
         default_ms=800,
         min_ms=0,
         max_ms=5000,
     )
 
 
-def coalesce_max_wait_seconds() -> float:
-    window = coalesce_delay_seconds()
+def coalesce_max_wait_seconds(profile_id: Optional[str] = None) -> float:
+    window = coalesce_delay_seconds(profile_id)
     max_wait = delay_seconds_from_ms(
-        USER_MESSAGE_COALESCE_MAX_MS,
+        str(
+            get_profile_user_message_coalesce_max_ms(profile_id)
+            if profile_id
+            else USER_MESSAGE_COALESCE_MAX_MS
+        ),
         default_ms=2500,
         min_ms=0,
         max_ms=12000,
@@ -470,11 +478,16 @@ def coalesce_max_wait_seconds() -> float:
     return max_wait
 
 
-async def coalesce_user_message(chat_id: str, text: str, is_audio: bool) -> Optional[tuple[str, bool]]:
-    window = coalesce_delay_seconds()
+async def coalesce_user_message(
+    chat_id: str,
+    text: str,
+    is_audio: bool,
+    profile_id: Optional[str] = None,
+) -> Optional[tuple[str, bool]]:
+    window = coalesce_delay_seconds(profile_id)
     if window <= 0 or not chat_id:
         return (text, is_audio)
-    max_wait = coalesce_max_wait_seconds()
+    max_wait = coalesce_max_wait_seconds(profile_id)
     if max_wait <= 0:
         max_wait = window
 

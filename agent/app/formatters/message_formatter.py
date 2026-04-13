@@ -2,16 +2,15 @@ import re
 from typing import Optional
 
 from ..config.settings import (
-    ARIANE_FIRST_MESSAGE_DELAY_MS,
-    ARIANE_MESSAGE_DELAY_MS,
-    ARIANE_SCHEDULE_DELAY_MS,
-    FIRST_MESSAGE_DELAY_MS,
-    MESSAGE_DELAY_MS,
     MESSAGE_SPLIT_MAX_CHARS,
     MESSAGE_SPLIT_PRESENTATION_MAX_CHARS,
     MESSAGE_SPLIT_TARGET_CHARS,
     PROMPT_PROFILE,
-    SCHEDULE_DELAY_MS,
+)
+from ..core.profiles import (
+    get_profile_first_message_delay_ms,
+    get_profile_message_delay_ms,
+    get_profile_schedule_delay_ms,
 )
 from ..profiles.ariane.rules import matches_ariane_alias
 from ..utils.text import normalize_text, strip_list_prefix
@@ -212,16 +211,30 @@ def is_reply_with_schedule_options(reply: str) -> bool:
 
 
 def message_delay_seconds(profile_id: Optional[str] = None) -> float:
-    raw = ARIANE_MESSAGE_DELAY_MS if matches_ariane_alias(profile_id or "") else MESSAGE_DELAY_MS
-    return delay_seconds_from_ms(raw, default_ms=350, min_ms=0, max_ms=60000)
+    resolved_profile_id = profile_id or PROMPT_PROFILE or None
+    return delay_seconds_from_ms(
+        str(get_profile_message_delay_ms(resolved_profile_id)),
+        default_ms=350,
+        min_ms=0,
+        max_ms=60000,
+    )
 
 
 def schedule_delay_seconds(profile_id: Optional[str] = None) -> float:
-    raw = ARIANE_SCHEDULE_DELAY_MS if matches_ariane_alias(profile_id or "") else SCHEDULE_DELAY_MS
-    return delay_seconds_from_ms(raw, default_ms=350, min_ms=0, max_ms=60000)
+    resolved_profile_id = profile_id or PROMPT_PROFILE or None
+    return delay_seconds_from_ms(
+        str(get_profile_schedule_delay_ms(resolved_profile_id)),
+        default_ms=350,
+        min_ms=0,
+        max_ms=60000,
+    )
 
 
 def first_message_delay_seconds(profile_id: Optional[str] = None) -> float:
-    raw = ARIANE_FIRST_MESSAGE_DELAY_MS if matches_ariane_alias(profile_id or "") else FIRST_MESSAGE_DELAY_MS
-    return delay_seconds_from_ms(raw, default_ms=180, min_ms=0, max_ms=60000)
-
+    resolved_profile_id = profile_id or PROMPT_PROFILE or None
+    return delay_seconds_from_ms(
+        str(get_profile_first_message_delay_ms(resolved_profile_id)),
+        default_ms=180,
+        min_ms=0,
+        max_ms=60000,
+    )

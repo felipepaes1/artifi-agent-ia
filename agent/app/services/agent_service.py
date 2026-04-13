@@ -30,6 +30,7 @@ logger = logging.getLogger("agent")
 
 CURRENT_CHAT_ID: contextvars.ContextVar[str] = contextvars.ContextVar("CURRENT_CHAT_ID", default="")
 CURRENT_PROFILE_ID: contextvars.ContextVar[str] = contextvars.ContextVar("CURRENT_PROFILE_ID", default="")
+CURRENT_USER_INPUT: contextvars.ContextVar[str] = contextvars.ContextVar("CURRENT_USER_INPUT", default="")
 
 audio_service.configure_runtime(
     chat_context=CURRENT_CHAT_ID,
@@ -44,6 +45,7 @@ knowledge_service.configure_runtime(
 scheduling_service.configure_runtime(
     chat_context=CURRENT_CHAT_ID,
     profile_context=CURRENT_PROFILE_ID,
+    user_input_context=CURRENT_USER_INPUT,
     profile_resolver=resolve_profile_for_chat,
     ariane_matcher=is_ariane_profile,
 )
@@ -221,8 +223,10 @@ async def run_agent(
 ) -> Any:
     chat_token = CURRENT_CHAT_ID.set(chat_id)
     profile_token = CURRENT_PROFILE_ID.set(profile_id or "")
+    input_token = CURRENT_USER_INPUT.set(input_text or "")
     try:
         return await Runner.run(agent, input=input_text, session=session)
     finally:
+        CURRENT_USER_INPUT.reset(input_token)
         CURRENT_PROFILE_ID.reset(profile_token)
         CURRENT_CHAT_ID.reset(chat_token)

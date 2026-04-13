@@ -16,6 +16,7 @@ from ..services.agent_service import (
     log_empty_output_diagnostics,
     run_agent,
 )
+from ..services.guardrail_service import enforce_scheduling_entity_guardrail
 from ..services.scheduling_service import inject_fake_schedule
 
 
@@ -81,7 +82,10 @@ def build_chat_router() -> APIRouter:
         agent = get_agent(profile_id)
         try:
             result = await run_agent(agent, message, session, session_id, profile_id)
-            reply = truncate(sanitize_plain_text(extract_text_from_result(result), profile_id))
+            reply = truncate(
+                sanitize_plain_text(extract_text_from_result(result), profile_id),
+                profile_id,
+            )
         except Exception as exc:
             logger.exception("Agent run failed: %s", exc)
             raise HTTPException(status_code=502, detail="Agent run failed") from exc
@@ -89,6 +93,7 @@ def build_chat_router() -> APIRouter:
         if not reply:
             log_empty_output_diagnostics(result, "chat_endpoint")
             reply = "Desculpe, nao consegui responder agora."
+        reply = enforce_scheduling_entity_guardrail(profile_id, message, reply)
         reply = inject_fake_schedule(
             session_id,
             message,

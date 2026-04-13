@@ -5,11 +5,20 @@ from typing import Any, Dict, Optional
 
 from ..booking_flow import BookingFlow, load_profile_flows
 from ..config.settings import (
+    ARIANE_FIRST_MESSAGE_DELAY_MS,
+    ARIANE_MESSAGE_DELAY_MS,
+    ARIANE_SCHEDULE_DELAY_MS,
     CRIOLASER_AUDIO_BUCKET,
+    FIRST_MESSAGE_DELAY_MS,
     INSTRUCTIONS_PATH,
+    MAX_REPLY_CHARS,
+    MESSAGE_DELAY_MS,
     PROMPT_PROFILE,
     PROFILES_PATH,
+    SCHEDULE_DELAY_MS,
     SYSTEM_PROMPT,
+    USER_MESSAGE_COALESCE_MAX_MS,
+    USER_MESSAGE_COALESCE_MS,
 )
 from ..profiles.ariane.rules import is_ariane_profile as is_ariane_profile_rule
 from ..utils.text import normalize_text
@@ -97,6 +106,14 @@ PROFILE_LABEL_TO_ID = {
 PROFILE_DEFAULT_ID = PROFILE_LIST[0].get("id") if PROFILE_LIST else ""
 PROFILES_BASE_DIR = os.path.dirname(PROFILES_PATH) or os.path.dirname(os.path.dirname(__file__))
 PROFILE_FLOWS: Dict[str, BookingFlow] = load_profile_flows(PROFILE_LIST, PROFILES_BASE_DIR)
+PROFILE_INT_SETTING_LIMITS = {
+    "max_reply_chars": (0, 4000),
+    "message_delay_ms": (0, 60000),
+    "first_message_delay_ms": (0, 60000),
+    "schedule_delay_ms": (0, 60000),
+    "user_message_coalesce_ms": (0, 12000),
+    "user_message_coalesce_max_ms": (0, 30000),
+}
 
 
 def load_vector_store_map_from_env() -> Dict[str, list[str]]:
@@ -222,6 +239,154 @@ def get_profile_max_tokens(profile_id: Optional[str]) -> Optional[int]:
     return parsed if parsed > 0 else None
 
 
+def _coerce_profile_int_setting(
+    profile_id: Optional[str],
+    setting_name: str,
+    raw_value: Any,
+) -> Optional[int]:
+    if raw_value is None or raw_value == "":
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid %s for profile %s: %s",
+            setting_name,
+            profile_id or "",
+            raw_value,
+        )
+        return None
+    min_value, max_value = PROFILE_INT_SETTING_LIMITS.get(setting_name, (0, 10**9))
+    if parsed < min_value:
+        return min_value
+    if parsed > max_value:
+        return max_value
+    return parsed
+
+
+def _profile_env_override(profile_id: Optional[str], setting_name: str) -> Any:
+    if not profile_id:
+        return None
+    env_key = f"AGENT_PROFILE_{str(profile_id).strip().upper()}_{setting_name.upper()}"
+    raw_value = os.getenv(env_key)
+    if raw_value is None or not str(raw_value).strip():
+        return None
+    return raw_value.strip()
+
+
+def get_profile_max_reply_chars(profile_id: Optional[str]) -> int:
+    env_override = _profile_env_override(profile_id, "max_reply_chars")
+    parsed_override = _coerce_profile_int_setting(profile_id, "max_reply_chars", env_override)
+    if parsed_override is not None:
+        return parsed_override
+    profile = PROFILES.get(profile_id) if profile_id else None
+    raw_value = None
+    if profile:
+        raw_value = profile.get("max_reply_chars")
+        if raw_value in (None, ""):
+            raw_value = profile.get("maxReplyChars")
+    parsed = _coerce_profile_int_setting(profile_id, "max_reply_chars", raw_value)
+    if parsed is not None:
+        return parsed
+    return max(0, int(MAX_REPLY_CHARS))
+
+
+def get_profile_message_delay_ms(profile_id: Optional[str]) -> int:
+    env_override = _profile_env_override(profile_id, "message_delay_ms")
+    parsed_override = _coerce_profile_int_setting(profile_id, "message_delay_ms", env_override)
+    if parsed_override is not None:
+        return parsed_override
+    profile = PROFILES.get(profile_id) if profile_id else None
+    raw_value = None
+    if profile:
+        raw_value = profile.get("message_delay_ms")
+        if raw_value in (None, ""):
+            raw_value = profile.get("messageDelayMs")
+    parsed = _coerce_profile_int_setting(profile_id, "message_delay_ms", raw_value)
+    if parsed is not None:
+        return parsed
+    fallback = ARIANE_MESSAGE_DELAY_MS if is_ariane_profile(profile_id) else MESSAGE_DELAY_MS
+    return _coerce_profile_int_setting(profile_id, "message_delay_ms", fallback) or 350
+
+
+def get_profile_first_message_delay_ms(profile_id: Optional[str]) -> int:
+    env_override = _profile_env_override(profile_id, "first_message_delay_ms")
+    parsed_override = _coerce_profile_int_setting(profile_id, "first_message_delay_ms", env_override)
+    if parsed_override is not None:
+        return parsed_override
+    profile = PROFILES.get(profile_id) if profile_id else None
+    raw_value = None
+    if profile:
+        raw_value = profile.get("first_message_delay_ms")
+        if raw_value in (None, ""):
+            raw_value = profile.get("firstMessageDelayMs")
+    parsed = _coerce_profile_int_setting(profile_id, "first_message_delay_ms", raw_value)
+    if parsed is not None:
+        return parsed
+    fallback = ARIANE_FIRST_MESSAGE_DELAY_MS if is_ariane_profile(profile_id) else FIRST_MESSAGE_DELAY_MS
+    return _coerce_profile_int_setting(profile_id, "first_message_delay_ms", fallback) or 180
+
+
+def get_profile_schedule_delay_ms(profile_id: Optional[str]) -> int:
+    env_override = _profile_env_override(profile_id, "schedule_delay_ms")
+    parsed_override = _coerce_profile_int_setting(profile_id, "schedule_delay_ms", env_override)
+    if parsed_override is not None:
+        return parsed_override
+    profile = PROFILES.get(profile_id) if profile_id else None
+    raw_value = None
+    if profile:
+        raw_value = profile.get("schedule_delay_ms")
+        if raw_value in (None, ""):
+            raw_value = profile.get("scheduleDelayMs")
+    parsed = _coerce_profile_int_setting(profile_id, "schedule_delay_ms", raw_value)
+    if parsed is not None:
+        return parsed
+    fallback = ARIANE_SCHEDULE_DELAY_MS if is_ariane_profile(profile_id) else SCHEDULE_DELAY_MS
+    return _coerce_profile_int_setting(profile_id, "schedule_delay_ms", fallback) or 350
+
+
+def get_profile_user_message_coalesce_ms(profile_id: Optional[str]) -> int:
+    env_override = _profile_env_override(profile_id, "user_message_coalesce_ms")
+    parsed_override = _coerce_profile_int_setting(profile_id, "user_message_coalesce_ms", env_override)
+    if parsed_override is not None:
+        return parsed_override
+    profile = PROFILES.get(profile_id) if profile_id else None
+    raw_value = None
+    if profile:
+        raw_value = profile.get("user_message_coalesce_ms")
+        if raw_value in (None, ""):
+            raw_value = profile.get("userMessageCoalesceMs")
+    parsed = _coerce_profile_int_setting(profile_id, "user_message_coalesce_ms", raw_value)
+    if parsed is not None:
+        return parsed
+    return _coerce_profile_int_setting(
+        profile_id,
+        "user_message_coalesce_ms",
+        USER_MESSAGE_COALESCE_MS,
+    ) or 800
+
+
+def get_profile_user_message_coalesce_max_ms(profile_id: Optional[str]) -> int:
+    env_override = _profile_env_override(profile_id, "user_message_coalesce_max_ms")
+    parsed_override = _coerce_profile_int_setting(profile_id, "user_message_coalesce_max_ms", env_override)
+    if parsed_override is not None:
+        return parsed_override
+    profile = PROFILES.get(profile_id) if profile_id else None
+    raw_value = None
+    if profile:
+        raw_value = profile.get("user_message_coalesce_max_ms")
+        if raw_value in (None, ""):
+            raw_value = profile.get("userMessageCoalesceMaxMs")
+    parsed = _coerce_profile_int_setting(profile_id, "user_message_coalesce_max_ms", raw_value)
+    if parsed is not None:
+        return parsed
+    return _coerce_profile_int_setting(
+        profile_id,
+        "user_message_coalesce_max_ms",
+        USER_MESSAGE_COALESCE_MAX_MS,
+    ) or 2500
+
+
 def get_docs_dir_for_profile(profile_id: Optional[str]) -> str:
     if not profile_id:
         return ""
@@ -311,9 +476,44 @@ def append_response_style_instructions(instructions: str, profile_id: Optional[s
     return f"{instructions.rstrip()}{DIRECT_RESPONSE_STYLE_GUIDANCE}"
 
 
+def append_flow_context_instructions(instructions: str, profile_id: Optional[str]) -> str:
+    if not profile_id:
+        return instructions
+    flow = PROFILE_FLOWS.get(profile_id)
+    lines = [
+        "",
+        "",
+        "Contexto operacional estruturado",
+        "- Mantenha o tom, a abordagem comercial e as regras especificas deste prompt.",
+        "- Use o flow.json deste perfil como fonte estruturada para agenda, sinal, coleta obrigatoria e handoff.",
+        "- Use buscar_info_clinica como fonte de fatos confirmaveis da clinica. Nao replique do prompt fatos que dependem de confirmacao atual.",
+        "- Se buscar_info_clinica nao confirmar um fato, trate como nao confirmado no momento.",
+    ]
+    if flow is not None:
+        if flow.schedule_provider:
+            if flow.schedule_provider == "fake":
+                lines.append(
+                    "- Agenda gerenciada pelo sistema. Somente ofereça horários se profissional, serviço ou procedimento estiver confirmado para este perfil."
+                )
+            else:
+                lines.append("- Quando a agenda for usada, siga o provider configurado no flow.json.")
+        if flow.collect_fields:
+            labels = ", ".join(field.label for field in flow.collect_fields if field.label)
+            if labels:
+                lines.append(f"- Campos estruturados antes da conclusao: {labels}.")
+        if flow.requires_deposit:
+            lines.append("- Confirmacao final exige sinal/comprovante antes de concluir a reserva.")
+        else:
+            lines.append("- Se o fluxo nao exigir sinal, nao invente etapa de pagamento.")
+    return f"{instructions.rstrip()}{chr(10).join(lines)}"
+
+
 def append_profile_runtime_instructions(instructions: str, profile_id: Optional[str]) -> str:
     return append_audio_tool_instructions(
-        append_response_style_instructions(instructions, profile_id),
+        append_flow_context_instructions(
+            append_response_style_instructions(instructions, profile_id),
+            profile_id,
+        ),
         profile_id,
     )
 
