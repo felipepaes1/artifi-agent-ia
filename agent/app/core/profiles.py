@@ -1,7 +1,9 @@
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Callable, Dict, Optional
+from zoneinfo import ZoneInfo
 
 from ..booking_flow import BookingFlow, load_profile_flows
 from ..config.settings import (
@@ -452,6 +454,28 @@ def load_instructions() -> str:
     except OSError as exc:
         logger.warning("Failed to read instructions file %s: %s", INSTRUCTIONS_PATH, exc)
     return "You are a helpful assistant. Reply in a concise and practical way."
+
+
+_TZ_BR = ZoneInfo("America/Sao_Paulo")
+_WEEKDAYS_PT = [
+    "segunda-feira",
+    "terca-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sabado",
+    "domingo",
+]
+
+
+def make_dynamic_instructions(static_instructions: str) -> Callable:
+    """Wraps static instructions in a callable that appends the current BR date on every run."""
+    def _instructions(_ctx: Any, _agent: Any) -> str:
+        now = datetime.now(tz=_TZ_BR)
+        weekday = _WEEKDAYS_PT[now.weekday()]
+        date_str = now.strftime(f"%d/%m/%Y ({weekday})")
+        return f"{static_instructions}\n\nData de hoje: {date_str}"
+    return _instructions
 
 
 def append_audio_tool_instructions(instructions: str, profile_id: Optional[str]) -> str:

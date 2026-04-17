@@ -20,6 +20,7 @@ from ..core.profiles import (
     get_vector_store_ids,
     load_instructions,
     load_profile_instructions,
+    make_dynamic_instructions,
     profile_uses_direct_response_style,
 )
 from . import audio_service, knowledge_service, scheduling_service
@@ -165,9 +166,10 @@ def build_tools_for_profile(profile_id: Optional[str]) -> list[Any]:
 
 def build_agent() -> Agent:
     profile_hint = PROMPT_PROFILE or PROFILE_DEFAULT_ID or None
+    static = append_profile_runtime_instructions(load_instructions(), profile_hint)
     kwargs: Dict[str, Any] = {
         "name": "Assistente",
-        "instructions": append_profile_runtime_instructions(load_instructions(), profile_hint),
+        "instructions": make_dynamic_instructions(static),
     }
     tools = build_tools_for_profile(profile_hint)
     if tools:
@@ -181,13 +183,13 @@ def build_agent() -> Agent:
 
 
 def build_agent_for_profile(profile_id: str) -> Agent:
-    instructions = load_profile_instructions(profile_id)
-    if not instructions:
-        instructions = append_profile_runtime_instructions(load_instructions(), profile_id)
+    static = load_profile_instructions(profile_id)
+    if not static:
+        static = append_profile_runtime_instructions(load_instructions(), profile_id)
     profile = PROFILES.get(profile_id) or {}
     kwargs: Dict[str, Any] = {
         "name": profile.get("label") or "Assistente",
-        "instructions": instructions,
+        "instructions": make_dynamic_instructions(static),
     }
     tools = build_tools_for_profile(profile_id)
     if tools:
