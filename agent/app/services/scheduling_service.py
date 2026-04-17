@@ -105,6 +105,113 @@ def uses_mcp_scheduling(
     return flow.schedule_provider == MCP_SCHEDULING_PROVIDER
 
 
+def recommend_mariano_doctor(text: str) -> Dict[str, str]:
+    lowered = normalize_text(text)
+    default_doctor = {
+        "doctor_name": "Dr. Bruno Honorato Mariano",
+        "doctor_short_name": "Dr. Bruno",
+        "doctor_specialties": "traumatologia buco-maxilo-facial, periodontia e dentística",
+    }
+
+    if any(
+        token in lowered
+        for token in (
+            "implante",
+            "implantes",
+            "zigomatic",
+            "zigomático",
+            "reabilitacao sobre implante",
+            "reabilitação sobre implante",
+            "protese sobre implante",
+            "prótese sobre implante",
+            "proteses sobre implantes",
+            "próteses sobre implantes",
+        )
+    ):
+        return {
+            "doctor_name": "Dr. Luiz Gonzaga Mariano",
+            "doctor_short_name": "Dr. Luiz Gonzaga",
+            "doctor_specialties": "implantes dentários e reabilitações sobre implantes",
+        }
+
+    if any(
+        token in lowered
+        for token in (
+            "protese",
+            "prótese",
+            "coroa",
+            "coroas",
+            "faceta",
+            "facetas",
+            "lente",
+            "lentes",
+            "cerec",
+            "estetica",
+            "estética",
+            "aparelho",
+            "aparelhos",
+            "ortodont",
+            "ortopedia facial",
+            "mordida",
+            "alinhamento",
+        )
+    ):
+        return {
+            "doctor_name": "Dr. Luiz Oscar Mariano",
+            "doctor_short_name": "Dr. Luiz Oscar",
+            "doctor_specialties": "prótese, ortodontia e ortopedia facial",
+        }
+
+    return default_doctor
+
+
+def build_fake_schedule_details(
+    profile_id: Optional[str],
+    chat_id: str,
+    options: list[str],
+    context_text: str,
+    *,
+    force_ariane: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+    if not options:
+        return {}
+    flow_profile_id = resolve_flow_profile_id(profile_id, chat_id, force_ariane=force_ariane)
+    if flow_profile_id != "mariano":
+        return {}
+    doctor = recommend_mariano_doctor(context_text)
+    guidance = (
+        f"Seu caso sera direcionado ao {doctor['doctor_name']}, "
+        f"especialista em {doctor['doctor_specialties']}."
+    )
+    return {option: {**doctor, "guidance": guidance} for option in options}
+
+
+def build_schedule_guidance(
+    profile_id: Optional[str],
+    option: str,
+    chat_id: str = "",
+    fallback_text: str = "",
+    *,
+    force_ariane: bool = False,
+) -> str:
+    flow_profile_id = resolve_flow_profile_id(profile_id, chat_id, force_ariane=force_ariane)
+    if flow_profile_id != "mariano":
+        return ""
+    details = get_schedule_option_details(chat_id, option) if chat_id else {}
+    if not details:
+        details = recommend_mariano_doctor(fallback_text)
+    guidance = str(details.get("guidance") or "").strip()
+    if guidance:
+        return guidance
+    doctor_name = str(details.get("doctor_name") or "").strip()
+    doctor_specialties = str(details.get("doctor_specialties") or "").strip()
+    if not doctor_name:
+        return ""
+    if doctor_specialties:
+        return f"Seu caso sera direcionado ao {doctor_name}, especialista em {doctor_specialties}."
+    return f"Seu caso sera direcionado ao {doctor_name}."
+
+
 def extract_day_time(text: str) -> Optional[str]:
     if not text:
         return None
@@ -186,13 +293,25 @@ def build_schedule_confirmation(
     force_ariane: bool = False,
 ) -> str:
     flow = get_booking_flow(profile_id, chat_id, force_ariane=force_ariane)
+    guidance = build_schedule_guidance(
+        profile_id,
+        option,
+        chat_id,
+        fallback_text=user_text,
+        force_ariane=force_ariane,
+    )
     if flow is not None:
-        return build_prebooking_message(flow, option)
+        response = build_prebooking_message(flow, option)
+        if guidance:
+            return f"{response} {guidance}".strip()
+        return response
 
     response = f"Perfeito! Vou reservar para {option}."
     lowered = normalize_text(user_text)
     if any(token in lowered for token in ("demora", "quanto tempo", "tempo leva", "demor", "duracao")):
         response += " Sobre o tempo, isso pode variar conforme o caso e explicamos melhor na avaliação."
+    if guidance:
+        response += f" {guidance}"
     return response
 
 
@@ -502,13 +621,13 @@ def fake_schedule_options(preference: Optional[str]) -> list[str]:
     start = date.today() + timedelta(days=1)
     days = next_business_days(start, 3)
     if preference == "morning":
-        times = ["09:30", "10:30", "11:30"]
+        times = ["09:00", "10:00", "11:00"]
     elif preference == "afternoon":
-        times = ["14:00", "15:30", "17:00"]
+        times = ["14:00", "15:00", "16:00"]
     elif preference == "evening":
-        times = ["18:00", "18:30", "19:00"]
+        times = ["18:00", "19:00", "20:00"]
     else:
-        times = ["10:00", "15:00", "17:30"]
+        times = ["10:00", "15:00", "17:00"]
     return [f"{weekday_pt_br(day)} {time}" for day, time in zip(days, times)]
 
 
@@ -589,11 +708,17 @@ def inject_fake_schedule(chat_id: str, body: str, reply: str, has_scheduling_too
         return reply
     if not should_inject_fake_schedule(reply):
         return reply
+    profile_id = resolve_profile_for_chat(chat_id) if resolve_profile_for_chat is not None else ""
     preference = parse_schedule_preference(body)
     options = fake_schedule_options(preference)
-    store_schedule_options(chat_id, options)
+    details = build_fake_schedule_details(profile_id, chat_id, options, body)
+    store_schedule_options(chat_id, options, details)
     horarios = ", ".join(options)
-    suggestion = f"Tenho estes horarios disponiveis nesta semana: {horarios}. Qual prefere?"
+    guidance = build_schedule_guidance(profile_id, options[0], chat_id, fallback_text=body) if options else ""
+    if guidance:
+        suggestion = f"Tenho estes horarios disponiveis nesta semana: {horarios}. {guidance} Qual prefere?"
+    else:
+        suggestion = f"Tenho estes horarios disponiveis nesta semana: {horarios}. Qual prefere?"
     return f"{reply}\n\n{suggestion}"
 
 
@@ -675,8 +800,14 @@ def build_scheduling_tool():
 
             pref = parse_schedule_preference(preference_text or "")
             options = fake_schedule_options(pref)
+            details = build_fake_schedule_details(
+                profile_id,
+                chat_id,
+                options,
+                " ".join(part for part in (current_user_input, preference_text) if part).strip(),
+            )
             if chat_id:
-                store_schedule_options(chat_id, options)
+                store_schedule_options(chat_id, options, details)
             return {
                 "status": "ok",
                 "task": "get_horarios",
