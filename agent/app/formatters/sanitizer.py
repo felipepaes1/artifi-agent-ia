@@ -15,11 +15,89 @@ from ..utils.text import normalize_text, strip_list_prefix
 logger = logging.getLogger("agent")
 
 
+_TERMINAL_PUNCT = ".!?…;:"
+_SENTENCE_ENDERS = (". ", "! ", "? ", "… ", "…")
+
+
+def _smart_cut(text: str, max_chars: int) -> str:
+    """Truncate text to <= max_chars, preferring sentence/word boundaries.
+
+    Never cuts in the middle of a word when avoidable.
+    """
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    window = text[:max_chars]
+    minimum = int(max_chars * 0.5)
+
+    idx = window.rfind("\n\n")
+    if idx >= minimum:
+        return window[:idx].rstrip()
+    idx = window.rfind("\n")
+    if idx >= minimum:
+        return window[:idx].rstrip()
+    for ender in _SENTENCE_ENDERS:
+        idx = window.rfind(ender)
+        if idx >= minimum:
+            return window[: idx + len(ender)].rstrip()
+    idx = window.rfind(" ")
+    if idx > 0:
+        return window[:idx].rstrip()
+    return window
+
+
 def truncate(text: str, profile_id: Optional[str] = None) -> str:
     max_chars = get_profile_max_reply_chars(profile_id or PROMPT_PROFILE or None)
     if max_chars <= 0:
         return text
-    return text[:max_chars]
+    if len(text) <= max_chars:
+        return text
+    cut = _smart_cut(text, max_chars)
+    logger.info(
+        "Reply truncated from %d to %d chars (max=%d, profile=%s)",
+        len(text),
+        len(cut),
+        max_chars,
+        profile_id or PROMPT_PROFILE or "",
+    )
+    return cut
+
+
+def _trim_dangling_tail_in_paragraph(paragraph: str) -> str:
+    """Drop a short, unterminated trailing fragment in a paragraph.
+
+    Guards against LLM outputs like a paragraph ending in a short dangling
+    word (e.g. "... adicional.\\nVou"). Only trims when the tail after the
+    last terminal punctuation is a single short word — stays conservative
+    to avoid false positives on short legit utterances.
+    """
+    stripped = paragraph.rstrip()
+    if not stripped:
+        return paragraph
+    if stripped[-1] in _TERMINAL_PUNCT:
+        return stripped
+    last_terminal = -1
+    for ch in ".!?…":
+        pos = stripped.rfind(ch)
+        if pos > last_terminal:
+            last_terminal = pos
+    if last_terminal < 0:
+        return stripped
+    tail = stripped[last_terminal + 1 :].strip()
+    if not tail:
+        return stripped
+    if " " not in tail and len(tail) <= 15:
+        logger.warning("Dropped dangling tail fragment from reply: %r", tail[:40])
+        return stripped[: last_terminal + 1].rstrip()
+    return stripped
+
+
+def trim_dangling_tails(text: str) -> str:
+    if not text:
+        return text
+    cleaned = text.replace("\r\n", "\n")
+    paragraphs = cleaned.split("\n\n")
+    trimmed = [_trim_dangling_tail_in_paragraph(part) for part in paragraphs]
+    return "\n\n".join(part for part in trimmed if part)
 
 
 def sanitize_plain_text(text: str, profile_id: Optional[str] = None) -> str:
@@ -34,6 +112,7 @@ def sanitize_plain_text(text: str, profile_id: Optional[str] = None) -> str:
         sanitized = "\n".join(strip_list_prefix(line) for line in cleaned.splitlines())
     sanitized = sanitize_internal_knowledge_references(sanitized)
     sanitized = sanitize_phone_number_requests(sanitized)
+    sanitized = trim_dangling_tails(sanitized)
     return sanitized
 
 
@@ -70,6 +149,12 @@ def sanitize_internal_knowledge_references(text: str) -> str:
         r"aproveitando.*arquiv",
         r"posso ajudar.*relacionad[oa].*arquiv",
         r"arquivos?\s+que\s+voc[eê]\s+enviou",
+        r"obrigad[oa].*pel[ao]s?\s+(?:envio\s+d[oa]s?\s+)?(?:arquiv|document|anex)",
+        r"obrigad[oa].*pel[ao]s?\s+(?:arquiv|document|anex)",
+        r"recebi.*(?:seus?\s+)?(?:arquiv|document|anex|exame)",
+        r"em\s+rela[cç][aã]o\s+a\s+esses?\s+(?:arquiv|document|anex)",
+        r"sobre\s+(?:esses?|os)\s+(?:arquiv|document|anex)",
+        r"vi\s+(?:os?|seus?)\s+(?:arquiv|document|anex)",
     )
     kept_lines: list[str] = []
     for line in text.splitlines():

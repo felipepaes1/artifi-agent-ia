@@ -93,12 +93,33 @@ def split_long_chunk(text: str, max_chars: int) -> list[str]:
     remaining = cleaned
     while len(remaining) > max_chars:
         window = remaining[:max_chars]
-        line_break_at = window.rfind("\n")
-        split_at = line_break_at
-        if split_at < int(max_chars * 0.45):
-            split_at = window.rfind(" ")
-        if split_at <= 0:
-            split_at = max_chars
+        minimum = int(max_chars * 0.45)
+
+        split_at = -1
+        for pattern in ("\n\n", "\n"):
+            idx = window.rfind(pattern)
+            if idx >= minimum:
+                split_at = idx
+                break
+        if split_at < 0:
+            for ender in (". ", "! ", "? ", "… "):
+                idx = window.rfind(ender)
+                if idx >= minimum:
+                    split_at = idx + len(ender) - 1
+                    break
+        if split_at < 0:
+            idx = window.rfind(" ")
+            if idx >= minimum:
+                split_at = idx
+        if split_at < 0:
+            # No good boundary inside window — look for the next space AFTER max_chars
+            # so we never cut mid-word, even if the resulting chunk exceeds max_chars.
+            next_space = remaining.find(" ", max_chars)
+            if next_space > 0:
+                split_at = next_space
+            else:
+                # No whitespace anywhere ahead — emit the whole remainder.
+                split_at = len(remaining)
 
         chunk = remaining[:split_at].strip()
         if chunk:
