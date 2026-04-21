@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 
 from ..config.settings import SESSION_MAX_ITEMS, SUPABASE_APP
 from ..integrations.supabase import supabase_fetch_recent, supabase_insert
+from ..integrations.supabase_agent import record_turn
 from ..integrations.waha import name_from_payload, normalize_phone
 
 
@@ -88,6 +89,7 @@ async def log_conversation(
     user_message: str,
     bot_message: str,
     message_type: str,
+    profile_id: Optional[str] = None,
 ) -> None:
     if not user_message and not bot_message:
         return
@@ -105,4 +107,18 @@ async def log_conversation(
         "app": SUPABASE_APP or None,
     }
     await supabase_insert(row)
+
+    if profile_id:
+        try:
+            await record_turn(
+                tenant_slug=profile_id,
+                phone=phone or chat_id,
+                wa_chat_id=chat_id,
+                display_name=user_name,
+                user_message=user_message or None,
+                bot_message=bot_message or None,
+                message_type=message_type,
+            )
+        except Exception as exc:
+            logger.warning("Dual-write to agent schema failed: %s", exc)
 

@@ -278,6 +278,7 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
                 pending_message,
                 f"{greeting}\n\n[{service_audio['session_note']}]",
                 "audio_auto",
+                profile_id=profile_id,
             )
             await trim_session(session, SESSION_MAX_ITEMS)
             return {
@@ -449,6 +450,7 @@ def build_waha_router() -> APIRouter:
                     "[comprovante_pix_midia]",
                     reply,
                     msg_type or "media",
+                    profile_id=pending_booking.get("profile_id"),
                 )
                 return {"ok": True, "signal_confirmed": True}
             reply = "Consigo acessar apenas mensagens de texto e audio. Pode enviar em texto ou audio, por favor?"
@@ -588,6 +590,7 @@ def build_waha_router() -> APIRouter:
                     body,
                     greeting,
                     "audio" if is_audio else "text",
+                    profile_id=profile_id,
                 )
                 await trim_session(session, SESSION_MAX_ITEMS)
                 return {"ok": True, "greeted": True, "greeting_only": True}
@@ -619,6 +622,7 @@ def build_waha_router() -> APIRouter:
                     body,
                     f"{greeting}\n\n[{service_audio['session_note']}]",
                     "audio_auto",
+                    profile_id=profile_id,
                 )
                 await trim_session(session, SESSION_MAX_ITEMS)
                 return {
@@ -656,6 +660,7 @@ def build_waha_router() -> APIRouter:
                 body,
                 combined,
                 "audio" if is_audio else "text",
+                profile_id=profile_id,
             )
             await trim_session(session, SESSION_MAX_ITEMS)
             return {"ok": True, "greeted": True, "answered": True}
@@ -684,6 +689,7 @@ def build_waha_router() -> APIRouter:
                 body,
                 reply,
                 "audio" if is_audio else "text",
+                profile_id=profile_id,
             )
             await trim_session(session, SESSION_MAX_ITEMS)
             return {"ok": True, "signal_confirmed_text": True}
@@ -761,6 +767,7 @@ def build_waha_router() -> APIRouter:
                 body,
                 reply,
                 "audio" if is_audio else "text",
+                profile_id=profile_id,
             )
             await trim_session(session, SESSION_MAX_ITEMS)
             return {"ok": True, "schedule_confirmed": True}
@@ -787,6 +794,7 @@ def build_waha_router() -> APIRouter:
                 body,
                 f"[{service_audio['session_note']}]",
                 "audio_auto",
+                profile_id=profile_id,
             )
             await trim_session(session, SESSION_MAX_ITEMS)
             return {"ok": True, "service_audio_sent": service_audio["filename"]}
@@ -821,6 +829,7 @@ def build_waha_router() -> APIRouter:
             body,
             reply,
             "audio" if is_audio else "text",
+            profile_id=profile_id,
         )
         await trim_session(session, SESSION_MAX_ITEMS)
         return {"ok": True}
