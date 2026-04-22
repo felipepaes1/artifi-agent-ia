@@ -45,6 +45,27 @@ def _smart_cut(text: str, max_chars: int) -> str:
     return window
 
 
+def _drop_orphan_header(text: str) -> str:
+    """Drop a trailing line that ends in ':' when its list was cut off.
+
+    Only runs after a truncate, when the final non-empty line is an
+    introducer like "Por favor me informe:" left without the items
+    it was introducing. Prevents confusing outputs where the user
+    is asked to provide data but no list appears.
+    """
+    if not text:
+        return text
+    stripped = text.rstrip()
+    while stripped:
+        newline_pos = stripped.rfind("\n")
+        last_line = stripped[newline_pos + 1 :].strip()
+        if not last_line.endswith(":"):
+            break
+        logger.info("Dropped orphan header after truncate: %r", last_line[:60])
+        stripped = stripped[:newline_pos].rstrip() if newline_pos >= 0 else ""
+    return stripped
+
+
 def truncate(text: str, profile_id: Optional[str] = None) -> str:
     max_chars = get_profile_max_reply_chars(profile_id or PROMPT_PROFILE or None)
     if max_chars <= 0:
@@ -52,6 +73,7 @@ def truncate(text: str, profile_id: Optional[str] = None) -> str:
     if len(text) <= max_chars:
         return text
     cut = _smart_cut(text, max_chars)
+    cut = _drop_orphan_header(cut)
     logger.info(
         "Reply truncated from %d to %d chars (max=%d, profile=%s)",
         len(text),

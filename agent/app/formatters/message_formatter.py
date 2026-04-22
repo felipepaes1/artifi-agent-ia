@@ -208,8 +208,13 @@ def merge_short_whatsapp_parts(
         emoji_or_punct_only = is_emoji_or_punctuation_only(text)
         same_message_budget = len(prev) + len(text) + 2 <= target_chars
         is_question = text.endswith("?")
+        # Previous part ending in ":" is an introducer — always keep its
+        # follow-up attached so users don't get a "me informe:" dangling alone.
+        prev_is_introducer = prev.rstrip().endswith(":")
 
-        if same_message_budget and (is_short or emoji_or_punct_only) and not is_question:
+        if same_message_budget and prev_is_introducer:
+            merged[-1] = f"{prev}\n{text}".strip()
+        elif same_message_budget and (is_short or emoji_or_punct_only) and not is_question:
             joiner = " " if emoji_or_punct_only else "\n"
             merged[-1] = f"{prev}{joiner}{text}".strip()
         else:
