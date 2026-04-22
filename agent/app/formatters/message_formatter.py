@@ -4,6 +4,7 @@ from typing import Optional
 from ..config.settings import (
     MESSAGE_SPLIT_MAX_CHARS,
     MESSAGE_SPLIT_PRESENTATION_MAX_CHARS,
+    MESSAGE_SPLIT_SENTENCE_THRESHOLD,
     MESSAGE_SPLIT_TARGET_CHARS,
     PROMPT_PROFILE,
 )
@@ -11,9 +12,61 @@ from ..core.profiles import (
     get_profile_first_message_delay_ms,
     get_profile_message_delay_ms,
     get_profile_schedule_delay_ms,
+    profile_uses_direct_response_style,
 )
 from ..profiles.ariane.rules import matches_ariane_alias
 from ..utils.text import normalize_text, strip_list_prefix
+
+
+_SENT_BOUNDARY = re.compile(r"([.!?…])(\s+)(?=[A-ZÁÉÍÓÚÂÊÔÃÕÀÇÜ0-9])")
+_ABBREVIATIONS = frozenset(
+    {
+        "dr",
+        "dra",
+        "sr",
+        "sra",
+        "prof",
+        "profa",
+        "etc",
+        "obs",
+        "vs",
+        "ex",
+        "n",
+        "no",
+        "nos",
+        "pe",
+        "fl",
+        "fls",
+    }
+)
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    """Split text on sentence boundaries, respecting common PT-BR abbreviations.
+
+    Keeps terminal punctuation attached to each sentence. Boundaries require
+    whitespace followed by an uppercase letter or digit, to avoid cutting
+    decimals like "R$ 600,00" or initials.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    pieces: list[str] = []
+    last_pos = 0
+    for match in _SENT_BOUNDARY.finditer(cleaned):
+        punct_pos = match.start(1)
+        k = punct_pos - 1
+        while k >= 0 and cleaned[k].isalpha():
+            k -= 1
+        word = cleaned[k + 1 : punct_pos].lower()
+        if word in _ABBREVIATIONS:
+            continue
+        end = match.end(1)
+        pieces.append(cleaned[last_pos:end].strip())
+        last_pos = match.end()
+    if last_pos < len(cleaned):
+        pieces.append(cleaned[last_pos:].strip())
+    return [p for p in pieces if p]
 
 
 def clamp_int(raw_value: str, *, default: int, min_value: int, max_value: int) -> int:
@@ -131,11 +184,16 @@ def split_long_chunk(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def merge_short_whatsapp_parts(parts: list[str], target_chars: int) -> list[str]:
+def merge_short_whatsapp_parts(
+    parts: list[str],
+    target_chars: int,
+    short_limit: Optional[int] = None,
+) -> list[str]:
     if not parts:
         return []
     merged: list[str] = []
-    short_limit = max(60, min(120, int(target_chars * 0.35)))
+    if short_limit is None:
+        short_limit = max(60, min(120, int(target_chars * 0.35)))
 
     for part in parts:
         text = (part or "").strip()
@@ -200,9 +258,38 @@ def split_messages(text: str, profile_id: Optional[str] = None) -> list[str]:
         else:
             parts.append(paragraph)
 
+    resolved_profile_id = profile_id or PROMPT_PROFILE or None
+    sentence_threshold = clamp_int(
+        MESSAGE_SPLIT_SENTENCE_THRESHOLD,
+        default=180,
+        min_value=0,
+        max_value=max_chars,
+    )
+    sentence_split_done = False
+    if (
+        sentence_threshold > 0
+        and profile_uses_direct_response_style(resolved_profile_id)
+        and not looks_like_presentation_message(cleaned, profile_id)
+    ):
+        expanded: list[str] = []
+        for part in parts:
+            if len(part) > sentence_threshold:
+                sentences = _split_into_sentences(part)
+                if len(sentences) > 1:
+                    expanded.extend(sentences)
+                    sentence_split_done = True
+                    continue
+            expanded.append(part)
+        parts = expanded
+
     normalized = [normalize_whatsapp_part(part) for part in parts]
     filtered = [part for part in normalized if part]
-    merged = merge_short_whatsapp_parts(filtered, target_chars)
+    merge_short_limit = 30 if sentence_split_done else None
+    merged = merge_short_whatsapp_parts(
+        filtered,
+        target_chars,
+        short_limit=merge_short_limit,
+    )
     return [part for part in merged if part]
 
 
