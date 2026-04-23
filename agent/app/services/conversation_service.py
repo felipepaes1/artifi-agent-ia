@@ -32,6 +32,28 @@ async def hydrate_session_from_supabase(session, chat_id: str) -> None:
         logger.warning("Failed to hydrate session from Supabase: %s", exc)
 
 
+async def _clear_session_items(session) -> bool:
+    for method_name in ("clear_session", "clear", "clear_items", "delete_items"):
+        method = getattr(session, method_name, None)
+        if not method:
+            continue
+        try:
+            await method()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to %s session: %s", method_name, exc)
+    for method_name in ("set_items", "replace_items"):
+        method = getattr(session, method_name, None)
+        if not method:
+            continue
+        try:
+            await method([])
+            return True
+        except Exception as exc:
+            logger.warning("Failed to %s session: %s", method_name, exc)
+    return False
+
+
 async def trim_session(session, max_items: int = SESSION_MAX_ITEMS) -> None:
     if max_items <= 0:
         return
@@ -42,45 +64,16 @@ async def trim_session(session, max_items: int = SESSION_MAX_ITEMS) -> None:
     if len(items) <= max_items:
         return
     keep = items[-max_items:]
-
-    for method_name in ("set_items", "replace_items"):
-        method = getattr(session, method_name, None)
-        if method:
-            try:
-                await method(keep)
-                return
-            except Exception as exc:
-                logger.warning("Failed to %s on session: %s", method_name, exc)
-                return
-
-    for method_name in ("clear", "clear_items", "delete_items"):
-        method = getattr(session, method_name, None)
-        if method:
-            try:
-                await method()
-                await session.add_items(keep)
-            except Exception as exc:
-                logger.warning("Failed to %s session: %s", method_name, exc)
-            return
+    if not await _clear_session_items(session):
+        return
+    try:
+        await session.add_items(keep)
+    except Exception as exc:
+        logger.warning("Failed to re-add trimmed items: %s", exc)
 
 
 async def reset_session(session) -> None:
-    for method_name in ("clear", "clear_items", "delete_items"):
-        method = getattr(session, method_name, None)
-        if method:
-            try:
-                await method()
-                return
-            except Exception:
-                pass
-    for method_name in ("set_items", "replace_items"):
-        method = getattr(session, method_name, None)
-        if method:
-            try:
-                await method([])
-                return
-            except Exception:
-                pass
+    await _clear_session_items(session)
 
 
 async def log_conversation(
