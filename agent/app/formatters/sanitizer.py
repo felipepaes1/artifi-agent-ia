@@ -135,6 +135,8 @@ def sanitize_plain_text(text: str, profile_id: Optional[str] = None) -> str:
     sanitized = sanitize_internal_knowledge_references(sanitized)
     sanitized = sanitize_phone_number_requests(sanitized)
     sanitized = trim_dangling_tails(sanitized)
+    if (profile_id or PROMPT_PROFILE or "").strip().lower() == "biovita":
+        sanitized = sanitize_biovita_gender(sanitized)
     return sanitized
 
 
@@ -160,6 +162,68 @@ def sanitize_phone_number_requests(text: str) -> str:
         kept.append(line)
     result = "\n".join(kept).strip()
     return result if result else text
+
+
+_BIOVITA_GENDER_REPLACEMENTS = (
+    # Combined: article + "Clínica Biovita" -> masculine article + "Laboratório Biovita"
+    (
+        re.compile(r"\b([Aa])\s+Cl[ií]nica\s+Biovita\b"),
+        lambda m: ("O" if m.group(1) == "A" else "o") + " Laboratório Biovita",
+    ),
+    (
+        re.compile(r"\b([Dd])a\s+Cl[ií]nica\s+Biovita\b"),
+        lambda m: m.group(1) + "o Laboratório Biovita",
+    ),
+    (
+        re.compile(r"\b([Nn])a\s+Cl[ií]nica\s+Biovita\b"),
+        lambda m: m.group(1) + "o Laboratório Biovita",
+    ),
+    (
+        re.compile(r"\b([Àà])\s+Cl[ií]nica\s+Biovita\b"),
+        lambda m: ("Ao" if m.group(1) == "À" else "ao") + " Laboratório Biovita",
+    ),
+    (
+        re.compile(r"\b([Pp])ela\s+Cl[ií]nica\s+Biovita\b"),
+        lambda m: m.group(1) + "elo Laboratório Biovita",
+    ),
+    # Bare article + Biovita
+    (
+        re.compile(r"\b([Aa])\s+Biovita\b"),
+        lambda m: ("O" if m.group(1) == "A" else "o") + " Biovita",
+    ),
+    (
+        re.compile(r"\b([Dd])a\s+Biovita\b"),
+        lambda m: m.group(1) + "o Biovita",
+    ),
+    (
+        re.compile(r"\b([Nn])a\s+Biovita\b"),
+        lambda m: m.group(1) + "o Biovita",
+    ),
+    (
+        re.compile(r"\b([Àà])\s+Biovita\b"),
+        lambda m: ("Ao" if m.group(1) == "À" else "ao") + " Biovita",
+    ),
+    (
+        re.compile(r"\b([Pp])ela\s+Biovita\b"),
+        lambda m: m.group(1) + "elo Biovita",
+    ),
+    # Bare "Clínica Biovita" (without article) -> "Laboratório Biovita"
+    (re.compile(r"\bCl[ií]nica\s+Biovita\b"), "Laboratório Biovita"),
+    (re.compile(r"\bcl[ií]nica\s+Biovita\b"), "laboratório Biovita"),
+)
+
+
+def sanitize_biovita_gender(text: str) -> str:
+    """Force masculine gender for Biovita references (laboratório, not clínica).
+
+    Biovita is a laboratory; the LLM occasionally uses feminine articles.
+    Only applied for the biovita profile via sanitize_plain_text.
+    """
+    if not text:
+        return text
+    for pattern, replacement in _BIOVITA_GENDER_REPLACEMENTS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def sanitize_internal_knowledge_references(text: str) -> str:
