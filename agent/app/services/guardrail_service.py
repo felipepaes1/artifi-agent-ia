@@ -207,58 +207,11 @@ def _candidate_matches_result(candidate: Dict[str, str], result: Dict[str, Any])
 
 
 def validate_scheduling_entities(profile_id: Optional[str], text: str) -> Dict[str, Any]:
-    if not profile_id:
-        return {"status": "allowed", "candidates": []}
-    candidates = extract_scheduling_validation_candidates(text)
-    if not candidates:
-        return {"status": "allowed", "candidates": []}
-
-    checked: list[Dict[str, Any]] = []
-    for candidate in candidates:
-        query = str(candidate.get("query") or candidate.get("label") or "").strip()
-        if not query:
-            continue
-        try:
-            payload = search_profile_vector_knowledge(profile_id=profile_id, query=query, top_k=3)
-        except Exception as exc:
-            logger.warning(
-                "Scheduling guardrail search failed profile=%s candidate=%s: %s",
-                profile_id,
-                candidate.get("label"),
-                exc,
-            )
-            continue
-        results = payload.get("results") or []
-        confirmed = any(_candidate_matches_result(candidate, result) for result in results if isinstance(result, dict))
-        checked.append(
-            {
-                **candidate,
-                "confirmed": confirmed,
-                "results": len(results),
-            }
-        )
-
-    invalid = [candidate for candidate in checked if candidate.get("confirmed") is False]
-    if invalid:
-        first = invalid[0]
-        label = str(first.get("label") or "esse item").strip()
-        kind = str(first.get("kind") or "entity").strip()
-        kind_label = "profissional" if kind == "doctor" else "servico ou procedimento"
-        return {
-            "status": "blocked",
-            "candidate": label,
-            "kind": kind,
-            "message": (
-                f"Nao encontrei {kind_label} confirmado para este cliente: {label}. "
-                "Posso te direcionar com uma opcao valida da clinica?"
-            ),
-            "candidates": checked,
-        }
-
-    return {
-        "status": "allowed",
-        "candidates": checked,
-    }
+    # Guardrail desativado: o regex-based extractor produzia falsos positivos
+    # em fala natural (pronomes como "ele", fragmentos como "estou muita"),
+    # bloqueando agendamentos legítimos. Mantido como passthrough para não
+    # quebrar callers existentes (ex.: tool_agente_scheduling).
+    return {"status": "allowed", "candidates": []}
 
 
 def reply_advances_scheduling(reply: str) -> bool:
@@ -282,9 +235,9 @@ def enforce_scheduling_entity_guardrail(
     user_text: str,
     reply: str,
 ) -> str:
-    if not reply_advances_scheduling(reply):
-        return reply
-    validation = validate_scheduling_entities(profile_id, user_text)
-    if validation.get("status") != "blocked":
-        return reply
-    return str(validation.get("message") or reply).strip()
+    # Guardrail desativado. Estava substituindo a resposta real do agente por
+    # uma mensagem fixa ("Nao encontrei servico ou procedimento confirmado…")
+    # sempre que o extractor de entidades falhava em validar fragmentos da
+    # fala do usuario contra o vector store do perfil. Ficou atrapalhando a
+    # troca de atendimento e o fluxo natural de conversa.
+    return reply
