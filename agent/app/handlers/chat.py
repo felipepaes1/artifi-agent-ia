@@ -18,6 +18,7 @@ from ..services.agent_service import (
 )
 from ..services.guardrail_service import enforce_scheduling_entity_guardrail
 from ..services.scheduling_service import inject_fake_schedule
+from ..services.urgency_guardrail import maybe_handle_urgency
 
 
 logger = logging.getLogger("agent")
@@ -79,6 +80,14 @@ def build_chat_router() -> APIRouter:
             raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not set")
 
         session = get_session(session_id)
+        urgency_reply = await maybe_handle_urgency(profile_id, message, session)
+        if urgency_reply is not None:
+            return {
+                "reply": urgency_reply,
+                "session_id": session_id,
+                "profile_id": profile_id,
+            }
+
         agent = get_agent(profile_id)
         try:
             result = await run_agent(agent, message, session, session_id, profile_id)
