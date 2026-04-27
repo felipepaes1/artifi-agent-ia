@@ -76,13 +76,13 @@ def remember_recent_key(store: Dict[str, float], key: Optional[str], ttl_seconds
 def remember_recent_audio_sent(chat_id: str) -> None:
     if not chat_id:
         return
-    remember_recent_key(RECENT_AUDIO_SENT_CHATS, str(chat_id), 45)
+    remember_recent_key(RECENT_AUDIO_SENT_CHATS, str(chat_id), 20)
 
 
 def has_recent_audio_sent(chat_id: str) -> bool:
     if not chat_id:
         return False
-    return has_recent_key(RECENT_AUDIO_SENT_CHATS, str(chat_id), 45)
+    return has_recent_key(RECENT_AUDIO_SENT_CHATS, str(chat_id), 20)
 
 
 def service_audio_key(chat_id: str, filename: str) -> str:

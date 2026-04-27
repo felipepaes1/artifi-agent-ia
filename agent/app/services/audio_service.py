@@ -135,7 +135,7 @@ async def try_send_service_audio_for_message(
     user_text: str,
     *,
     active_turn: Optional[int] = None,
-    min_score: float = 0.72,
+    min_score: float = 0.65,
 ) -> Optional[Dict[str, str]]:
     bucket = get_audio_bucket_for_profile(profile_id)
     if not bucket or not chat_id:
