@@ -15,6 +15,11 @@ from ..config.settings import (
     INSTRUCTIONS_PATH,
     MAX_REPLY_CHARS,
     MESSAGE_DELAY_MS,
+    OPENAI_TTS_BUCKET,
+    OPENAI_TTS_FORMAT,
+    OPENAI_TTS_INSTRUCTIONS,
+    OPENAI_TTS_MODEL,
+    OPENAI_TTS_VOICE,
     PROMPT_PROFILE,
     PROFILES_PATH,
     SCHEDULE_DELAY_MS,
@@ -30,6 +35,8 @@ logger = logging.getLogger("agent")
 
 DIRECT_RESPONSE_STYLE = "direct"
 PRESERVE_RESPONSE_STYLE = "preserve"
+TEXT_REPLY_MODE = "text"
+TTS_AUDIO_REPLY_MODE = "audio"
 DIRECT_RESPONSE_STYLE_GUIDANCE = (
     "\n\nEstilo de resposta\n"
     "- Responda de forma direta e objetiva\n"
@@ -210,6 +217,99 @@ def get_profile_response_style(profile_id: Optional[str]) -> str:
 
 def profile_uses_direct_response_style(profile_id: Optional[str]) -> bool:
     return get_profile_response_style(profile_id) == DIRECT_RESPONSE_STYLE
+
+
+def _profile_bool_value(profile_id: Optional[str], setting_name: str, default: bool) -> bool:
+    env_override = _profile_env_override(profile_id, setting_name)
+    raw_value = env_override
+    if raw_value is None and profile_id:
+        profile = PROFILES.get(profile_id) or {}
+        raw_value = profile.get(setting_name)
+        if raw_value is None:
+            camel_name = "".join(
+                [setting_name.split("_")[0], *[part.capitalize() for part in setting_name.split("_")[1:]]]
+            )
+            raw_value = profile.get(camel_name)
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, (int, float)):
+        return bool(raw_value)
+    lowered = str(raw_value).strip().lower()
+    if lowered in ("1", "true", "yes", "y", "sim", "s"):
+        return True
+    if lowered in ("0", "false", "no", "n", "nao", "não"):
+        return False
+    logger.warning("Invalid boolean for profile %s %s: %s", profile_id or "", setting_name, raw_value)
+    return default
+
+
+def get_profile_reply_mode(profile_id: Optional[str]) -> str:
+    if not profile_id:
+        return TEXT_REPLY_MODE
+    profile = PROFILES.get(profile_id) or {}
+    raw_value = (
+        _profile_env_override(profile_id, "reply_mode")
+        or profile.get("reply_mode")
+        or profile.get("replyMode")
+        or TEXT_REPLY_MODE
+    )
+    normalized = str(raw_value or "").strip().lower()
+    if normalized in ("audio", "voice", "tts", "tts_audio", "audio_only", "audio-only"):
+        return TTS_AUDIO_REPLY_MODE
+    return TEXT_REPLY_MODE
+
+
+def profile_uses_tts_audio_reply(profile_id: Optional[str]) -> bool:
+    return get_profile_reply_mode(profile_id) == TTS_AUDIO_REPLY_MODE
+
+
+def _profile_tts_dict(profile_id: Optional[str]) -> Dict[str, Any]:
+    if not profile_id:
+        return {}
+    profile = PROFILES.get(profile_id) or {}
+    raw = profile.get("tts") or profile.get("text_to_speech") or profile.get("textToSpeech")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _profile_tts_value(profile_id: Optional[str], setting_name: str, default: str) -> str:
+    env_override = _profile_env_override(profile_id, f"tts_{setting_name}")
+    if env_override is not None:
+        return str(env_override).strip()
+    tts = _profile_tts_dict(profile_id)
+    profile = PROFILES.get(profile_id) if profile_id else None
+    raw_value = tts.get(setting_name)
+    if raw_value in (None, ""):
+        camel_name = "".join(
+            [setting_name.split("_")[0], *[part.capitalize() for part in setting_name.split("_")[1:]]]
+        )
+        raw_value = tts.get(camel_name)
+    if raw_value in (None, "") and profile:
+        raw_value = profile.get(f"tts_{setting_name}")
+    if raw_value in (None, ""):
+        return default
+    return str(raw_value).strip()
+
+
+def get_profile_tts_config(profile_id: Optional[str]) -> Dict[str, str]:
+    response_format = _profile_tts_value(profile_id, "response_format", "").lower()
+    if not response_format:
+        response_format = _profile_tts_value(profile_id, "format", OPENAI_TTS_FORMAT).lower()
+    if response_format not in ("mp3", "opus", "aac", "flac", "wav", "pcm"):
+        logger.warning("Invalid TTS format for profile %s: %s. Falling back to mp3.", profile_id or "", response_format)
+        response_format = "mp3"
+    return {
+        "model": _profile_tts_value(profile_id, "model", OPENAI_TTS_MODEL) or OPENAI_TTS_MODEL,
+        "voice": _profile_tts_value(profile_id, "voice", OPENAI_TTS_VOICE) or OPENAI_TTS_VOICE,
+        "response_format": response_format,
+        "instructions": _profile_tts_value(profile_id, "instructions", OPENAI_TTS_INSTRUCTIONS),
+        "bucket": _profile_tts_value(profile_id, "bucket", OPENAI_TTS_BUCKET) or OPENAI_TTS_BUCKET,
+    }
+
+
+def profile_tts_fallback_to_text(profile_id: Optional[str]) -> bool:
+    return _profile_bool_value(profile_id, "tts_fallback_to_text", True)
 
 
 def get_profile_temperature(profile_id: Optional[str]) -> Optional[float]:

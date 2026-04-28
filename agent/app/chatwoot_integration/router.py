@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Awaitable, Callable
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from .service import get_chatwoot_service
 
@@ -16,7 +16,7 @@ def build_chatwoot_router(send_text_parts: SendTextParts) -> APIRouter:
     service = get_chatwoot_service()
 
     @router.post("/webhook/chatwoot")
-    async def chatwoot_webhook(request: Request) -> dict:
+    async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
         raw_body = await request.body()
         headers = dict(request.headers)
         logger.info(
@@ -35,14 +35,21 @@ def build_chatwoot_router(send_text_parts: SendTextParts) -> APIRouter:
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid Chatwoot payload")
 
+        # Extract and validate synchronously (fast) so we can respond 200 immediately.
+        # The actual WhatsApp delivery runs in background to avoid Chatwoot webhook timeout.
         try:
-            return await service.process_message_created_event(
-                payload,
-                send_whatsapp_message=send_text_parts,
-            )
-        except HTTPException:
-            raise
+            extracted = service.extract_outbound_event(payload)
         except Exception as exc:
             raise HTTPException(status_code=502, detail="Failed to process Chatwoot webhook") from exc
+
+        if isinstance(extracted, str):
+            return {"ok": True, "ignored": extracted}
+
+        background_tasks.add_task(
+            service.deliver_outbound_event,
+            extracted,
+            send_whatsapp_message=send_text_parts,
+        )
+        return {"ok": True, "queued": True, "conversation_id": extracted["conversation_id"]}
 
     return router

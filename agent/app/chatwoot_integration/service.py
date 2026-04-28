@@ -195,12 +195,15 @@ class ChatwootService:
         except Exception as exc:
             logger.exception("Chatwoot outbound sync failed unexpectedly: %s", exc)
 
-    async def process_message_created_event(
-        self,
-        payload: dict[str, Any],
-        *,
-        send_whatsapp_message: SendWhatsappMessage,
-    ) -> dict[str, Any]:
+    def extract_outbound_event(
+        self, payload: dict[str, Any]
+    ) -> "dict[str, Any] | str":
+        """Validate and extract data from a Chatwoot webhook payload.
+
+        Returns a string (ignored reason) or a dict with keys:
+        message_id, conversation_id, content, chat_id, phone, contact_name.
+        This is fast/sync so the HTTP handler can respond 200 immediately.
+        """
         event = str(payload.get("event") or "").strip().lower()
         message_id = str(payload.get("id") or "").strip()
         conversation = payload.get("conversation") or {}
@@ -216,19 +219,17 @@ class ChatwootService:
         )
 
         if event != "message_created":
-            return {"ok": True, "ignored": "event"}
-
+            return "event"
         if message_id and self.store.is_processed_message(message_id):
-            return {"ok": True, "ignored": "duplicate_message"}
+            return "duplicate_message"
         if self._is_backend_origin_message(payload):
-            return {"ok": True, "ignored": "backend_origin"}
-
+            return "backend_origin"
         if not self._is_human_agent_message(payload):
-            return {"ok": True, "ignored": "not_human_agent"}
+            return "not_human_agent"
 
         content = str(payload.get("content") or "").strip()
         if not content:
-            return {"ok": True, "ignored": "empty_content"}
+            return "empty_content"
 
         mapping = self.store.get_by_conversation_id(conversation_id) if conversation_id else None
         chat_id = (mapping.whatsapp_chat_id if mapping else "") or self._extract_chat_id(payload)
@@ -239,7 +240,30 @@ class ChatwootService:
                 conversation_id,
                 message_id or None,
             )
-            return {"ok": True, "ignored": "missing_chat_id"}
+            return "missing_chat_id"
+
+        return {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "content": content,
+            "chat_id": chat_id,
+            "phone": phone,
+            "contact_name": self._extract_contact_name(payload),
+        }
+
+    async def deliver_outbound_event(
+        self,
+        extracted: dict[str, Any],
+        *,
+        send_whatsapp_message: SendWhatsappMessage,
+    ) -> None:
+        """Deliver a human-agent message to WhatsApp. Runs in background."""
+        chat_id = extracted["chat_id"]
+        content = extracted["content"]
+        message_id = extracted["message_id"]
+        conversation_id = extracted["conversation_id"]
+        phone = extracted["phone"]
+        contact_name = extracted["contact_name"]
 
         logger.info(
             "Chatwoot event received: conversation_id=%s phone=%s content=%s",
@@ -253,7 +277,12 @@ class ChatwootService:
         finally:
             _SUPPRESS_OUTBOUND_SYNC.reset(token)
         if not delivered:
-            raise RuntimeError("WhatsApp delivery aborted")
+            logger.warning(
+                "Chatwoot outbound delivery aborted by WhatsApp: conversation_id=%s chat_id=%s",
+                conversation_id,
+                chat_id,
+            )
+            return
         if message_id:
             self.store.mark_processed_message(message_id)
         if conversation_id:
@@ -261,16 +290,28 @@ class ChatwootService:
                 ChatwootMapping(
                     whatsapp_chat_id=chat_id,
                     phone=phone or _normalize_phone(chat_id),
-                    contact_name=self._extract_contact_name(payload),
+                    contact_name=contact_name,
                     conversation_id=conversation_id,
                     identifier=_preferred_contact_identifier(chat_id, phone),
                 )
             )
+
+    async def process_message_created_event(
+        self,
+        payload: dict[str, Any],
+        *,
+        send_whatsapp_message: SendWhatsappMessage,
+    ) -> dict[str, Any]:
+        """Legacy synchronous path — kept for backwards compatibility with tests."""
+        result = self.extract_outbound_event(payload)
+        if isinstance(result, str):
+            return {"ok": True, "ignored": result}
+        await self.deliver_outbound_event(result, send_whatsapp_message=send_whatsapp_message)
         return {
             "ok": True,
             "delivered": True,
-            "conversation_id": conversation_id,
-            "phone": phone or _normalize_phone(chat_id),
+            "conversation_id": result["conversation_id"],
+            "phone": result["phone"] or _normalize_phone(result["chat_id"]),
         }
 
     async def _ensure_mapping(

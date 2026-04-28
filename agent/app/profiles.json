@@ -73,6 +73,28 @@
       "greeting_message": "tudo bem? Seja bem-vindo! Sou a assistente da Ódena ✨, como posso te ajudar?",
       "docs_dir": "../../storage/odena",
       "flow_path": "../../storage/odena/flow.json"
+    },
+    {
+      "id": "bella_vita",
+      "label": "Estética (Teste)",
+      "instructions_path": "assistant_instructions_bella_vita.txt",
+      "response_style": "direct",
+      "temperature": 0.2,
+      "max_tokens": 220,
+      "max_reply_chars": 350,
+      "reply_mode": "audio",
+      "tts_fallback_to_text": true,
+      "tts": {
+        "model": "gpt-4o-mini-tts",
+        "voice": "marin",
+        "format": "mp3",
+        "bucket": "agent-tts-audio",
+        "instructions": "Fale em português do Brasil, com tom acolhedor, natural e profissional. Use ritmo natural de atendimento por WhatsApp."
+      },
+      "greeting_name": "Bella Vita Estética",
+      "greeting_message": "tudo bem? Sou a assistente da Bella Vita Estética ✨, como posso te ajudar?",
+      "docs_dir": "../../storage/bella_vita",
+      "flow_path": "../../storage/bella_vita/flow.json"
     }
   ]
 }

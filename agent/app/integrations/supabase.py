@@ -140,6 +140,33 @@ async def build_bucket_audio_url(bucket: str, file_name: str) -> Optional[str]:
     return f"{SUPABASE_URL}/storage/v1/{signed_url.lstrip('/')}"
 
 
+async def upload_storage_bytes(
+    bucket: str,
+    file_name: str,
+    content: bytes,
+    *,
+    content_type: str = "application/octet-stream",
+    upsert: bool = True,
+) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY or not bucket or not file_name or not content:
+        return False
+    encoded_path = quote(file_name.strip("/"), safe="/")
+    url = f"{SUPABASE_URL}/storage/v1/object/{quote(bucket, safe='')}/{encoded_path}"
+    headers = dict(supabase_storage_headers())
+    headers["Content-Type"] = content_type or "application/octet-stream"
+    headers["x-upsert"] = "true" if upsert else "false"
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            resp = await client.post(url, content=content, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning("Supabase upload failed: %s %s", resp.status_code, resp.text)
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("Supabase upload request failed: %s", exc)
+        return False
+
+
 def storage_list_prefix_sync(bucket: str, prefix: str = "") -> tuple[list[Dict[str, Any]], Optional[str]]:
     if not SUPABASE_URL or not SUPABASE_KEY or not bucket:
         return ([], "supabase_not_configured")
@@ -267,4 +294,3 @@ def build_bucket_audio_url_sync(bucket: str, file_name: str) -> Optional[str]:
     if signed_url.startswith("/"):
         return f"{SUPABASE_URL}/storage/v1{signed_url}"
     return f"{SUPABASE_URL}/storage/v1/{signed_url.lstrip('/')}"
-

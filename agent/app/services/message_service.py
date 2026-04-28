@@ -11,9 +11,11 @@ from ..formatters.message_formatter import (
     split_messages,
 )
 from ..integrations.waha import normalize_phone, send_text, typing_preview_seconds_for_text
+from ..core.profiles import profile_tts_fallback_to_text, profile_uses_tts_audio_reply
 from .audio_service import maybe_send_profile_audio
 from .routing_service import resolve_profile_for_chat
 from .scheduling_service import reply_contains_schedule_options
+from .tts_audio_service import send_tts_audio_reply
 
 
 logger = logging.getLogger("agent")
@@ -106,6 +108,22 @@ async def send_reply(
     get_audio_bucket_for_profile,
     is_chat_turn_current,
 ) -> bool:
+    if profile_uses_tts_audio_reply(profile_id):
+        try:
+            sent_audio = await send_tts_audio_reply(
+                chat_id=chat_id,
+                text=text,
+                profile_id=profile_id,
+                active_turn=active_turn,
+            )
+        except Exception as exc:
+            logger.warning("TTS audio reply failed chat=%s profile=%s: %s", chat_id, profile_id, exc)
+            sent_audio = False
+        if sent_audio:
+            return True
+        if not profile_tts_fallback_to_text(profile_id):
+            return False
+
     sent = await send_text_parts_fn(chat_id, text, active_turn=active_turn)
     if not sent:
         return False

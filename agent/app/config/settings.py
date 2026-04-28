@@ -39,6 +39,11 @@ OPENAI_MODEL = env_first("OPENAI_MODEL", "OPENAI_DEFAULT_MODEL")
 OPENAI_MAX_TOKENS = env_first("OPENAI_MAX_TOKENS")
 OPENAI_TRANSCRIBE_MODEL = env_first("OPENAI_TRANSCRIBE_MODEL", default="gpt-4o-mini-transcribe")
 OPENAI_TRANSCRIBE_LANGUAGE = env_first("OPENAI_TRANSCRIBE_LANGUAGE", default="pt")
+OPENAI_TTS_MODEL = env_first("OPENAI_TTS_MODEL", default="gpt-4o-mini-tts")
+OPENAI_TTS_VOICE = env_first("OPENAI_TTS_VOICE", default="marin")
+OPENAI_TTS_FORMAT = env_first("OPENAI_TTS_FORMAT", default="mp3")
+OPENAI_TTS_BUCKET = env_first("OPENAI_TTS_BUCKET", default="agent-tts-audio")
+OPENAI_TTS_INSTRUCTIONS = os.getenv("OPENAI_TTS_INSTRUCTIONS", "").strip()
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "").strip()
 PROMPT_PROFILE = os.getenv("AGENT_PROMPT_PROFILE", "").strip()
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
@@ -104,4 +109,3 @@ CRIOLASER_AUDIO_MAX_MATCHES = int(os.getenv("CRIOLASER_AUDIO_MAX_MATCHES", "2") 
 
 if OPENAI_API_KEY and not os.getenv("OPENAI_API_KEY"):
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
