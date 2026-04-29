@@ -154,7 +154,7 @@ class ChatwootService:
             if not mapping or not mapping.conversation_id:
                 return
             try:
-                await self.client.create_outgoing_message(
+                created = await self.client.create_outgoing_message(
                     conversation_id=int(mapping.conversation_id),
                     content=content,
                     echo_id=echo_id,
@@ -175,11 +175,19 @@ class ChatwootService:
                 )
                 if not mapping or not mapping.conversation_id:
                     return
-                await self.client.create_outgoing_message(
+                created = await self.client.create_outgoing_message(
                     conversation_id=int(mapping.conversation_id),
                     content=content,
                     echo_id=echo_id,
                 )
+            # Chatwoot strips echo_id from outbound webhook payloads, so we
+            # cannot rely on _is_backend_origin_message to break the loop when
+            # Chatwoot fires message_created back to /webhook/chatwoot. Mark
+            # the freshly-created message id as processed so the duplicate
+            # filter in extract_outbound_event drops it on arrival.
+            created_id = str((created or {}).get("id") or "").strip()
+            if created_id:
+                self.store.mark_processed_message(created_id)
             logger.info(
                 "Chatwoot outbound sync: conversation_id=%s phone=%s content=%s",
                 mapping.conversation_id,
