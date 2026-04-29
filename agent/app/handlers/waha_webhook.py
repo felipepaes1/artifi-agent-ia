@@ -245,7 +245,12 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
 
     if pending_message:
         if is_greeting_only(pending_message):
-            await send_text_parts(str(chat_id), greeting, active_turn=active_turn)
+            await send_reply(
+                str(chat_id),
+                greeting,
+                profile_id=profile_id,
+                active_turn=active_turn,
+            )
             try:
                 await session.add_items([{"role": "assistant", "content": greeting}])
             except Exception as exc:
@@ -256,7 +261,12 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
             await session.add_items([{"role": "assistant", "content": greeting}])
         except Exception as exc:
             logger.warning("Failed to persist greeting item: %s", exc)
-        await send_text_parts(str(chat_id), greeting, active_turn=active_turn)
+        await send_reply(
+            str(chat_id),
+            greeting,
+            profile_id=profile_id,
+            active_turn=active_turn,
+        )
         service_audio = await try_send_service_audio_for_message(
             str(chat_id),
             profile_id,
@@ -318,7 +328,12 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
         await trim_session(session, SESSION_MAX_ITEMS)
         return {"ok": True, "profile_selected": profile_id, "handled_pending": True}
 
-    await send_text_parts(str(chat_id), greeting, active_turn=active_turn)
+    await send_reply(
+        str(chat_id),
+        greeting,
+        profile_id=profile_id,
+        active_turn=active_turn,
+    )
     try:
         await session.add_items([{"role": "assistant", "content": greeting}])
     except Exception as exc:
@@ -448,7 +463,12 @@ def build_waha_router() -> APIRouter:
                     pending_booking.get("profile_id"),
                     str(chat_id),
                 )
-                await send_text_parts(chat_id, reply, active_turn=active_turn)
+                await send_reply(
+                    chat_id,
+                    reply,
+                    profile_id=pending_booking.get("profile_id"),
+                    active_turn=active_turn,
+                )
                 await log_conversation(
                     str(chat_id),
                     payload,
@@ -588,7 +608,12 @@ def build_waha_router() -> APIRouter:
                     await session.add_items([{"role": "assistant", "content": greeting}])
                 except Exception as exc:
                     logger.warning("Failed to persist greeting item: %s", exc)
-                await send_text_parts(chat_id, greeting, active_turn=active_turn)
+                await send_reply(
+                    chat_id,
+                    greeting,
+                    profile_id=profile_id,
+                    active_turn=active_turn,
+                )
                 await log_conversation(
                     str(chat_id),
                     payload,
@@ -604,7 +629,12 @@ def build_waha_router() -> APIRouter:
                 await session.add_items([{"role": "assistant", "content": greeting}])
             except Exception as exc:
                 logger.warning("Failed to persist greeting item: %s", exc)
-            await send_text_parts(chat_id, greeting, active_turn=active_turn)
+            await send_reply(
+                chat_id,
+                greeting,
+                profile_id=profile_id,
+                active_turn=active_turn,
+            )
             service_audio = await try_send_service_audio_for_message(
                 chat_id,
                 profile_id,
@@ -691,7 +721,12 @@ def build_waha_router() -> APIRouter:
                 )
             except Exception as exc:
                 logger.warning("Failed to persist signal confirmation: %s", exc)
-            await send_text_parts(chat_id, reply, active_turn=active_turn)
+            await send_reply(
+                chat_id,
+                reply,
+                profile_id=profile_id,
+                active_turn=active_turn,
+            )
             await log_conversation(
                 str(chat_id),
                 payload,
@@ -769,7 +804,12 @@ def build_waha_router() -> APIRouter:
                 )
             except Exception as exc:
                 logger.warning("Failed to persist schedule confirmation: %s", exc)
-            await send_text_parts(chat_id, reply, active_turn=active_turn)
+            await send_reply(
+                chat_id,
+                reply,
+                profile_id=profile_id,
+                active_turn=active_turn,
+            )
             await log_conversation(
                 str(chat_id),
                 payload,

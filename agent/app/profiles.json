@@ -83,7 +83,7 @@
       "max_tokens": 220,
       "max_reply_chars": 350,
       "reply_mode": "audio",
-      "tts_fallback_to_text": true,
+      "tts_fallback_to_text": false,
       "tts": {
         "model": "gpt-4o-mini-tts",
         "voice": "marin",

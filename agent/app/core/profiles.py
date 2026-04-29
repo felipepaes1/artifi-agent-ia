@@ -600,6 +600,20 @@ def append_response_style_instructions(instructions: str, profile_id: Optional[s
     return f"{instructions.rstrip()}{DIRECT_RESPONSE_STYLE_GUIDANCE}"
 
 
+def append_tts_audio_reply_instructions(instructions: str, profile_id: Optional[str]) -> str:
+    if not profile_uses_tts_audio_reply(profile_id):
+        return instructions
+    guidance = (
+        "\n\nModo de resposta em audio\n"
+        "- Este perfil envia as respostas ao WhatsApp como audio gerado automaticamente pelo sistema\n"
+        "- A sua resposta final ainda deve ser escrita em texto puro, pois ela sera usada como roteiro do audio\n"
+        "- Se o usuario pedir audio, nao diga que voce so consegue responder por texto; responda normalmente com o conteudo que deve ser falado\n"
+        "- Nao mencione TTS, conversao, ferramenta de audio, bastidores tecnicos ou limitacoes do canal\n"
+        "- Evite formatos visuais que so funcionam bem em texto; escreva como uma fala natural, curta e clara\n"
+    )
+    return f"{instructions.rstrip()}{guidance}"
+
+
 def append_flow_context_instructions(instructions: str, profile_id: Optional[str]) -> str:
     if not profile_id:
         return instructions
@@ -635,7 +649,10 @@ def append_flow_context_instructions(instructions: str, profile_id: Optional[str
 def append_profile_runtime_instructions(instructions: str, profile_id: Optional[str]) -> str:
     return append_audio_tool_instructions(
         append_flow_context_instructions(
-            append_response_style_instructions(instructions, profile_id),
+            append_tts_audio_reply_instructions(
+                append_response_style_instructions(instructions, profile_id),
+                profile_id,
+            ),
             profile_id,
         ),
         profile_id,
