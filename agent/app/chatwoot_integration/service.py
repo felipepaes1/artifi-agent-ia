@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import logging
 import os
+import threading
 import time
 import contextvars
 from typing import Any, Awaitable, Callable, Optional
@@ -20,6 +21,50 @@ _SUPPRESS_OUTBOUND_SYNC: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "chatwoot_suppress_outbound_sync",
     default=False,
 )
+
+# Chatwoot strips echo_id from outbound webhook payloads and the message_created
+# webhook can race ahead of our own create_outgoing_message HTTP response by
+# ~200ms, so message_id-based dedupe is unreliable. Track recently-issued
+# (conversation_id, content) tuples in-memory and use them as a fingerprint to
+# break the loop when the webhook fires for our own outbound posts.
+_RECENT_OUTBOUND_TTL_SECONDS = 60
+_recent_outbound_lock = threading.Lock()
+_recent_outbound: dict[tuple[int, str], float] = {}
+
+
+def _outbound_fingerprint(conversation_id: int, content: str) -> Optional[tuple[int, str]]:
+    if not conversation_id or not content:
+        return None
+    return (int(conversation_id), str(content).strip())
+
+
+def _mark_recent_outbound(conversation_id: int, content: str) -> None:
+    key = _outbound_fingerprint(conversation_id, content)
+    if key is None:
+        return
+    now = time.time()
+    cutoff = now - _RECENT_OUTBOUND_TTL_SECONDS
+    with _recent_outbound_lock:
+        _recent_outbound[key] = now
+        for stale_key, ts in list(_recent_outbound.items()):
+            if ts < cutoff:
+                del _recent_outbound[stale_key]
+
+
+def _consume_recent_outbound(conversation_id: int, content: str) -> bool:
+    key = _outbound_fingerprint(conversation_id, content)
+    if key is None:
+        return False
+    cutoff = time.time() - _RECENT_OUTBOUND_TTL_SECONDS
+    with _recent_outbound_lock:
+        ts = _recent_outbound.get(key)
+        if ts is None:
+            return False
+        if ts < cutoff:
+            del _recent_outbound[key]
+            return False
+        del _recent_outbound[key]
+        return True
 
 
 class ChatwootService:
@@ -153,6 +198,10 @@ class ChatwootService:
             )
             if not mapping or not mapping.conversation_id:
                 return
+            # Mark the fingerprint BEFORE the POST: Chatwoot's message_created
+            # webhook frequently races ahead of the create_outgoing_message HTTP
+            # response, so marking after the call is too late.
+            _mark_recent_outbound(int(mapping.conversation_id), content)
             try:
                 created = await self.client.create_outgoing_message(
                     conversation_id=int(mapping.conversation_id),
@@ -175,16 +224,12 @@ class ChatwootService:
                 )
                 if not mapping or not mapping.conversation_id:
                     return
+                _mark_recent_outbound(int(mapping.conversation_id), content)
                 created = await self.client.create_outgoing_message(
                     conversation_id=int(mapping.conversation_id),
                     content=content,
                     echo_id=echo_id,
                 )
-            # Chatwoot strips echo_id from outbound webhook payloads, so we
-            # cannot rely on _is_backend_origin_message to break the loop when
-            # Chatwoot fires message_created back to /webhook/chatwoot. Mark
-            # the freshly-created message id as processed so the duplicate
-            # filter in extract_outbound_event drops it on arrival.
             created_id = str((created or {}).get("id") or "").strip()
             if created_id:
                 self.store.mark_processed_message(created_id)
@@ -238,6 +283,11 @@ class ChatwootService:
         content = str(payload.get("content") or "").strip()
         if not content:
             return "empty_content"
+
+        if conversation_id and _consume_recent_outbound(conversation_id, content):
+            if message_id:
+                self.store.mark_processed_message(message_id)
+            return "recent_outbound"
 
         mapping = self.store.get_by_conversation_id(conversation_id) if conversation_id else None
         chat_id = (mapping.whatsapp_chat_id if mapping else "") or self._extract_chat_id(payload)
