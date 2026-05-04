@@ -1,7 +1,11 @@
 import hashlib
 import json
 import logging
+import os
+import time
 from typing import Any, Dict, Optional
+
+MAX_MESSAGE_AGE_SECONDS = int(os.getenv("MAX_MESSAGE_AGE_SECONDS", "120"))
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -381,6 +385,26 @@ def build_waha_router() -> APIRouter:
                 "body_hash": short_hash(raw_body),
             },
         )
+        ts_str = extract_timestamp(payload)
+        if ts_str:
+            try:
+                ts_val = float(ts_str)
+                if ts_val > 1e12:  
+                    ts_val = ts_val / 1000.0
+                age = time.time() - ts_val
+                if age > MAX_MESSAGE_AGE_SECONDS:
+                    log_webhook_debug(
+                        "stale_message",
+                        {
+                            "event_id": event_id,
+                            "chat_id": str(chat_id) if chat_id else None,
+                            "message_id": message_id,
+                            "age_s": round(age, 1),
+                        },
+                    )
+                    return {"ok": True, "ignored": "stale", "age_s": round(age, 1)}
+            except (TypeError, ValueError):
+                pass
         if is_duplicate_key_global(RECENT_EVENT_IDS, event_id, RECENT_EVENT_TTL_SECONDS):
             log_webhook_debug(
                 "duplicate_event",
