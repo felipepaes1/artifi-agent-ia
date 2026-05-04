@@ -6,6 +6,8 @@ import time
 from typing import Any, Dict, Optional
 
 MAX_MESSAGE_AGE_SECONDS = int(os.getenv("MAX_MESSAGE_AGE_SECONDS", "120"))
+WARMUP_PERIOD_SECONDS = int(os.getenv("WARMUP_PERIOD_SECONDS", "180"))
+STARTUP_TS = time.time()
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -355,6 +357,32 @@ def build_waha_router() -> APIRouter:
         event = data.get("event")
         if LOG_WEBHOOK_PAYLOADS:
             logger.info("Webhook payload (%s): %s", event, data)
+
+        payload_for_ts = data.get("payload") or {}
+        ts_str_global = extract_timestamp(payload_for_ts)
+        if ts_str_global:
+            try:
+                ts_val_global = float(ts_str_global)
+                if ts_val_global > 1e12:
+                    ts_val_global = ts_val_global / 1000.0
+                age_global = time.time() - ts_val_global
+                if age_global > MAX_MESSAGE_AGE_SECONDS:
+                    logger.info(
+                        "WebhookDebug stale_event: event=%s age_s=%.1f",
+                        event,
+                        age_global,
+                    )
+                    return {"ok": True, "ignored": "stale", "age_s": round(age_global, 1)}
+            except (TypeError, ValueError):
+                pass
+        else:
+            if (time.time() - STARTUP_TS) < WARMUP_PERIOD_SECONDS:
+                logger.info(
+                    "WebhookDebug warmup_drop: event=%s (no timestamp during warmup)",
+                    event,
+                )
+                return {"ok": True, "ignored": "warmup_no_timestamp"}
+
         if event == "poll.vote":
             return await handle_poll_vote(data)
         if event == "poll.vote.failed":
