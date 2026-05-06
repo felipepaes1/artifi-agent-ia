@@ -1,12 +1,40 @@
 import hashlib
+import json
 import re
 import unicodedata
+from typing import Any
 
 
-def normalize_text(text: str) -> str:
+def _stringify_text(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "\n".join(_stringify_text(item) for item in value if item)
+    if isinstance(value, dict):
+        chunks = []
+        for key in ("text", "content", "value"):
+            if key in value:
+                text = _stringify_text(value.get(key))
+                if text:
+                    chunks.append(text)
+        if chunks:
+            return "\n".join(chunks)
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def normalize_text(text: Any) -> str:
     if not text:
         return ""
-    normalized = unicodedata.normalize("NFD", text.lower())
+    raw = _stringify_text(text)
+    if not raw:
+        return ""
+    normalized = unicodedata.normalize("NFD", raw.lower())
     return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
 
 
@@ -39,4 +67,3 @@ def short_hash(value: str) -> str:
     if not value:
         return ""
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
-

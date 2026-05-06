@@ -88,7 +88,7 @@
         "model": "gpt-4o-mini-tts",
         "voice": "marin",
         "format": "mp3",
-        "bucket": "agent-tts-audio",
+        "bucket": "audio-tts-audio",
         "instructions": "Fale em português do Brasil, com tom acolhedor, natural e profissional. Use ritmo natural de atendimento por WhatsApp."
       },
       "greeting_name": "Bella Vita Estética",

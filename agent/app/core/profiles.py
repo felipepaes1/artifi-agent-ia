@@ -709,11 +709,13 @@ def profile_greeting_message(profile_id: Optional[str]) -> str:
 def has_profile_greeting(items: list[dict[str, Any]], profile_id: Optional[str]) -> bool:
     if not items:
         return False
-    marker = normalize_text(profile_greeting_message(profile_id))
+    marker = " ".join(normalize_text(profile_greeting_message(profile_id)).split())
     for item in items:
+        if not isinstance(item, dict):
+            continue
         if item.get("role") != "assistant":
             continue
-        content = normalize_text(item.get("content") or "")
+        content = " ".join(normalize_text(item.get("content") or "").split())
         if marker and marker in content:
             return True
     return False

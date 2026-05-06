@@ -101,6 +101,37 @@ def supabase_storage_headers() -> Dict[str, str]:
     return headers
 
 
+def _is_bucket_not_found_response(status_code: int, response_text: str) -> bool:
+    text = str(response_text or "").lower()
+    return status_code in (400, 404) and "bucket not found" in text
+
+
+async def create_storage_bucket(bucket: str, *, public: bool = False) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY or not bucket:
+        return False
+    url = f"{SUPABASE_URL}/storage/v1/bucket"
+    payload = {
+        "id": bucket,
+        "name": bucket,
+        "public": public,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(url, json=payload, headers=supabase_storage_headers())
+        if resp.status_code in (200, 201):
+            logger.info("Supabase storage bucket created: %s", bucket)
+            return True
+        response_text = resp.text or ""
+        lowered = response_text.lower()
+        if resp.status_code in (400, 409) and ("already exists" in lowered or "already_exist" in lowered):
+            return True
+        logger.warning("Supabase bucket create failed bucket=%s: %s %s", bucket, resp.status_code, response_text)
+        return False
+    except Exception as exc:
+        logger.warning("Supabase bucket create request failed bucket=%s: %s", bucket, exc)
+        return False
+
+
 async def list_bucket_audio_files(bucket: str) -> list[Dict[str, str]]:
     result = await anyio.to_thread.run_sync(list_bucket_audio_files_sync_detailed, bucket)
     if result.get("error"):
@@ -147,6 +178,7 @@ async def upload_storage_bytes(
     *,
     content_type: str = "application/octet-stream",
     upsert: bool = True,
+    auto_create_bucket: bool = False,
 ) -> bool:
     if not SUPABASE_URL or not SUPABASE_KEY or not bucket or not file_name or not content:
         return False
@@ -155,9 +187,21 @@ async def upload_storage_bytes(
     headers = dict(supabase_storage_headers())
     headers["Content-Type"] = content_type or "application/octet-stream"
     headers["x-upsert"] = "true" if upsert else "false"
-    try:
+
+    async def post_object():
         async with httpx.AsyncClient(timeout=40) as client:
-            resp = await client.post(url, content=content, headers=headers)
+            return await client.post(url, content=content, headers=headers)
+
+    try:
+        resp = await post_object()
+        if (
+            resp.status_code >= 400
+            and auto_create_bucket
+            and _is_bucket_not_found_response(resp.status_code, resp.text)
+        ):
+            logger.warning("Supabase bucket missing for upload, trying to create bucket=%s", bucket)
+            if await create_storage_bucket(bucket, public=False):
+                resp = await post_object()
         if resp.status_code >= 400:
             logger.warning("Supabase upload failed: %s %s", resp.status_code, resp.text)
             return False

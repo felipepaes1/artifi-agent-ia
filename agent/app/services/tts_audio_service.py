@@ -108,8 +108,15 @@ async def send_tts_audio_reply(
         audio_bytes,
         content_type=content_type,
         upsert=True,
+        auto_create_bucket=True,
     )
     if not uploaded:
+        logger.warning(
+            "TTS audio reply failed: upload unavailable bucket=%s file=%s profile=%s",
+            bucket,
+            file_name,
+            profile_id,
+        )
         return False
 
     media_url = await supabase_integration.build_bucket_audio_url(bucket, file_name)

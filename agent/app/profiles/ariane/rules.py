@@ -34,9 +34,12 @@ def is_ariane_context_from_items(items: list[dict[str, Any]], user_text: str = "
         return False
     chunks: list[str] = []
     for item in items[-16:]:
+        if not isinstance(item, dict):
+            continue
         if item.get("role") not in ("assistant", "user"):
             continue
-        content = (item.get("content") or "").strip()
+        raw_content = item.get("content") or ""
+        content = raw_content.strip() if isinstance(raw_content, str) else normalize_text(raw_content).strip()
         if content:
             chunks.append(content)
     if user_text:
@@ -58,4 +61,3 @@ def is_ariane_context_from_items(items: list[dict[str, Any]], user_text: str = "
         if marker in corpus:
             score += 1
     return score >= 2
-
