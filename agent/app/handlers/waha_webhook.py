@@ -357,6 +357,10 @@ def build_waha_router() -> APIRouter:
         event = data.get("event")
         if LOG_WEBHOOK_PAYLOADS:
             logger.info("Webhook payload (%s): %s", event, data)
+        if event == "poll.vote":
+            return await handle_poll_vote(data)
+        if event == "poll.vote.failed":
+            return await handle_poll_vote(data)
 
         payload_for_ts = data.get("payload") or {}
         ts_str_global = extract_timestamp(payload_for_ts)
@@ -383,10 +387,6 @@ def build_waha_router() -> APIRouter:
                 )
                 return {"ok": True, "ignored": "warmup_no_timestamp"}
 
-        if event == "poll.vote":
-            return await handle_poll_vote(data)
-        if event == "poll.vote.failed":
-            return await handle_poll_vote(data)
         if event not in ("message", "message.any", "message.new"):
             return {"ok": True, "ignored": "event"}
 
