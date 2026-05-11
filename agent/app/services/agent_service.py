@@ -22,6 +22,7 @@ from ..core.profiles import (
     load_profile_instructions,
     make_dynamic_instructions,
     profile_uses_direct_response_style,
+    profile_uses_handoff_scheduling,
 )
 from . import audio_service, knowledge_service, scheduling_service
 from .routing_service import resolve_profile_for_chat, is_ariane_profile
@@ -152,7 +153,7 @@ def build_tools_for_profile(profile_id: Optional[str]) -> list[Any]:
                     max_num_results=6,
                 )
             )
-    if SCHEDULING_TOOL is not None:
+    if SCHEDULING_TOOL is not None and not profile_uses_handoff_scheduling(profile_id):
         tools.append(SCHEDULING_TOOL)
     if KNOWLEDGE_TOOL is not None:
         tools.append(KNOWLEDGE_TOOL)

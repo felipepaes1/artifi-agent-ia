@@ -629,7 +629,11 @@ def append_flow_context_instructions(instructions: str, profile_id: Optional[str
     ]
     if flow is not None:
         if flow.schedule_provider:
-            if flow.schedule_provider == "fake":
+            if flow.schedule_provider == "handoff":
+                lines.append(
+                    "- Agendamento NAO e automatico neste canal. Apenas colete motivo e preferencia, cite o doutor indicado e informe que a responsavel pelo agendamento entrara em contato. Nao ofereca nem confirme horarios e nao chame ferramentas de agenda."
+                )
+            elif flow.schedule_provider == "fake":
                 lines.append(
                     "- Agenda gerenciada pelo sistema. Somente ofereça horários se profissional, serviço ou procedimento estiver confirmado para este perfil."
                 )
@@ -657,6 +661,15 @@ def append_profile_runtime_instructions(instructions: str, profile_id: Optional[
         ),
         profile_id,
     )
+
+
+def profile_uses_handoff_scheduling(profile_id: Optional[str]) -> bool:
+    if not profile_id:
+        return False
+    flow = PROFILE_FLOWS.get(profile_id)
+    if flow is None:
+        return False
+    return flow.schedule_provider == "handoff"
 
 
 def resolve_profile_instructions_path(path: str) -> str:

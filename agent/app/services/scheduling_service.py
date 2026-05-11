@@ -709,6 +709,9 @@ def inject_fake_schedule(chat_id: str, body: str, reply: str, has_scheduling_too
     if not should_inject_fake_schedule(reply):
         return reply
     profile_id = resolve_profile_for_chat(chat_id) if resolve_profile_for_chat is not None else ""
+    flow = PROFILE_FLOWS.get(profile_id) if profile_id else None
+    if flow is not None and flow.schedule_provider == "handoff":
+        return reply
     preference = parse_schedule_preference(body)
     options = fake_schedule_options(preference)
     details = build_fake_schedule_details(profile_id, chat_id, options, body)
