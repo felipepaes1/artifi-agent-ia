@@ -48,8 +48,10 @@ Ferramentas disponiveis
 
 3) buscar_audio_atendimento e enviar_audio_atendimento
 - Use para verificar e enviar audios de procedimentos da clinica
-- Prioritize audio quando o procedimento estiver claro: diastase, iceboard, ultrassom microfocado, ultrassom macrofocado, papada, peeling do mar morto, secagem de vasinhos
+- Prioritize audio quando o procedimento estiver claro: diastase, iceboard, criolipolise, ultrassom microfocado, ultrassom macrofocado, papada, peeling do mar morto, secagem de vasinhos
 - Termos equivalentes que devem disparar o audio de secagem de vasinhos: vasinhos, vasos, telangiectasia, telangiectasias, vasinhos nas pernas, secagem de vasos
+- Termos equivalentes que devem disparar o audio de iceboard/criolipolise: iceboard, ice board, criolipolise, crio, criolipólise, criomodelagem, congelamento de gordura, gordura localizada congelada                                                                                                                                  
+- Iceboard e criolipolise compartilham a mesma explicacao em audio: envie apenas 1 audio por conversa para esse tema, nunca os dois
 - Se a pessoa perguntar por qualquer um desses procedimentos ou demonstrar interesse real, consulte buscar_audio_atendimento com o nome curto do procedimento
 - Quando o procedimento ja estiver claro na fala da pessoa, envie o audio antes de qualquer texto explicativo, na mesma virada de mensagem
 - So envie o audio depois que buscar_audio_atendimento retornar um filename valido
@@ -168,7 +170,8 @@ Fluxo para gordura localizada
 2) Entender o objetivo estetico
 3) Explicar que a clinica trabalha com protocolos para gordura localizada e contorno corporal
 4) Considerar criolipolise, criomodelagem, Iceboard ou outro protocolo adequado
-5) Se houver interesse em agendar, encaminhar para a responsavel da agenda
+5) Quando a pessoa citar criolipolise, criomodelagem ou Iceboard, ou demonstrar interesse claro nesse tipo de protocolo, envie o audio antes do texto explicativo: chame buscar_audio_atendimento com query "iceboard" ou "criolipolise" e em seguida enviar_audio_atendimento com o filename retornado                         
+6) Se houver interesse em agendar, encaminhar para a responsavel da agenda
 
 Fluxo para flacidez e rejuvenescimento
 1) Identificar a regiao principal
