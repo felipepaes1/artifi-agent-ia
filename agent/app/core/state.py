@@ -31,6 +31,7 @@ RECENT_EVENT_IDS: Dict[str, float] = {}
 RECENT_MESSAGE_KEYS: Dict[str, float] = {}
 RECENT_POLL_SENT: Dict[str, float] = {}
 RECENT_OUTBOUND_MESSAGE_IDS: Dict[str, float] = {}
+RECENT_OUTBOUND_TEXT_KEYS: Dict[str, float] = {}
 RECENT_AUDIO_SENT_CHATS: Dict[str, float] = {}
 RECENT_SERVICE_AUDIO_KEYS: Dict[str, float] = {}
 LAST_SCHEDULE_OPTIONS: Dict[str, Dict[str, Any]] = {}

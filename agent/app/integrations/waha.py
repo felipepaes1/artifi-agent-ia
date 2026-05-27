@@ -30,6 +30,7 @@ from ..config.settings import (
 from ..core.profiles import PROFILE_OPTIONS, PROFILE_POLL_NAME
 from ..core.state import (
     RECENT_OUTBOUND_MESSAGE_IDS,
+    RECENT_OUTBOUND_TEXT_KEYS,
     remember_recent_audio_sent,
     remember_recent_key,
 )
@@ -233,6 +234,20 @@ def _looks_like_whatsapp_phone_id(value: Any) -> bool:
     return text.endswith("@c.us") or text.endswith("@s.whatsapp.net")
 
 
+def _extract_brazil_phone_digits(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if _looks_like_whatsapp_phone_id(text):
+        return normalize_phone(text)
+    if text.lower().endswith("@lid"):
+        return ""
+    digits = "".join(ch for ch in text.split("@", 1)[0] if ch.isdigit())
+    if digits.startswith("55") and len(digits) in (12, 13):
+        return digits
+    return ""
+
+
 def _looks_like_technical_whatsapp_name(value: Any) -> bool:
     text = str(value or "").strip().lower()
     if not text:
@@ -329,6 +344,9 @@ def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = 
             value = item.get(key)
             if _looks_like_whatsapp_phone_id(value):
                 return normalize_phone(str(value))
+            digits = _extract_brazil_phone_digits(value)
+            if digits:
+                return digits
 
         key_obj = item.get("key")
         if isinstance(key_obj, dict):
@@ -336,20 +354,51 @@ def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = 
                 value = key_obj.get(key)
                 if _looks_like_whatsapp_phone_id(value):
                     return normalize_phone(str(value))
+                digits = _extract_brazil_phone_digits(value)
+                if digits:
+                    return digits
 
         for nested_key in ("sender", "contact"):
             nested = item.get(nested_key)
             if not isinstance(nested, dict):
                 continue
-            for key in ("phone", "phoneNumber", "phone_number", "id", "jid", "whatsappJid", "whatsapp_jid"):
+            for key in ("phone", "phoneNumber", "phone_number", "jid", "whatsappJid", "whatsapp_jid"):
                 value = nested.get(key)
                 if _looks_like_whatsapp_phone_id(value):
                     return normalize_phone(str(value))
-                digits = normalize_phone(str(value or ""))
-                if len(digits) >= 8:
+                digits = _extract_brazil_phone_digits(value)
+                if digits:
                     return digits
+            nested_id = nested.get("id")
+            if _looks_like_whatsapp_phone_id(nested_id):
+                return normalize_phone(str(nested_id))
 
     return normalize_phone(fallback_chat_id)
+
+
+def extract_phone_from_contact_info(data: Dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in (
+        "phone",
+        "phoneNumber",
+        "phone_number",
+        "number",
+        "jid",
+        "whatsappJid",
+        "whatsapp_jid",
+        "id",
+    ):
+        digits = _extract_brazil_phone_digits(data.get(key))
+        if digits:
+            return digits
+    for key in ("contact", "sender", "profile"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            digits = extract_phone_from_contact_info(nested)
+            if digits:
+                return digits
+    return ""
 
 
 def guess_audio_filename(payload: Dict[str, Any], media_url: Optional[str] = None) -> str:
@@ -463,7 +512,7 @@ async def transcribe_audio(url: str, payload: Dict[str, Any]) -> Optional[str]:
         return None
 
 
-async def get_contact_name(chat_id: str) -> Optional[str]:
+async def get_contact_info(chat_id: str) -> Optional[Dict[str, Any]]:
     if not chat_id:
         return None
     params = {"contactId": chat_id, "session": WAHA_SESSION}
@@ -476,11 +525,25 @@ async def get_contact_name(chat_id: str) -> Optional[str]:
         data = resp.json()
         if not isinstance(data, dict):
             return None
-        for key in ("pushname", "name", "shortName"):
-            value = (data.get(key) or "").strip()
-            if value:
-                return value
+        return data
+
+
+async def get_contact_name(chat_id: str) -> Optional[str]:
+    data = await get_contact_info(chat_id)
+    if not data:
+        return None
+    for key in ("pushname", "pushName", "name", "shortName", "notifyName"):
+        value = (data.get(key) or "").strip()
+        if value and not _looks_like_technical_whatsapp_name(value):
+            return value
     return None
+
+
+async def get_contact_phone(chat_id: str) -> str:
+    data = await get_contact_info(chat_id)
+    if not data:
+        return ""
+    return extract_phone_from_contact_info(data)
 
 
 def waha_headers() -> Dict[str, str]:
@@ -526,6 +589,15 @@ def extract_waha_message_id(data: Dict[str, Any]) -> str:
             OUTBOUND_ECHO_TTL_SECONDS,
         )
     return str(message_id or "")
+
+
+def outbound_text_key(chat_id: str, text: str) -> str:
+    compact_chat_id = str(chat_id or "").strip()
+    compact_text = str(text or "").strip()
+    if not compact_chat_id or not compact_text:
+        return ""
+    digest = hashlib.sha1(compact_text.encode("utf-8")).hexdigest()
+    return f"text:{compact_chat_id}:{digest}"
 
 
 async def set_presence(chat_id: str, presence: str) -> None:
@@ -601,6 +673,11 @@ async def send_text(chat_id: str, text: str, *, preview_seconds: float | None = 
         "session": WAHA_SESSION,
     }
 
+    remember_recent_key(
+        RECENT_OUTBOUND_TEXT_KEYS,
+        outbound_text_key(chat_id, text),
+        OUTBOUND_ECHO_TTL_SECONDS,
+    )
     await show_typing_preview(chat_id, text, preview_seconds)
     url = f"{WAHA_BASE_URL}/api/sendText"
     async with httpx.AsyncClient(timeout=20) as client:

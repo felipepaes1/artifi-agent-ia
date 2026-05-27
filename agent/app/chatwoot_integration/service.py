@@ -183,6 +183,64 @@ class ChatwootService:
             )
         return True
 
+    async def activate_human_handoff(
+        self,
+        *,
+        chat_id: str,
+        phone: str,
+        contact_name: str,
+        reason: str = "",
+        create_note: bool = True,
+    ) -> bool:
+        if not self.config.account_mode:
+            return False
+        chat_id = str(chat_id or "").strip()
+        if not chat_id:
+            return False
+        phone_digits = _normalize_phone(phone) or _normalize_phone(chat_id)
+        mapping = await self._ensure_mapping(
+            chat_id=chat_id,
+            phone=phone_digits,
+            contact_name=contact_name,
+        )
+        if not mapping or not mapping.conversation_id:
+            return False
+
+        status = self.config.human_handoff_status or "open"
+        try:
+            await self.client.update_conversation_status(
+                conversation_id=int(mapping.conversation_id),
+                status=status,
+            )
+        except ChatwootApiError as exc:
+            logger.warning(
+                "Chatwoot human handoff status update failed: conversation_id=%s status=%s response=%s",
+                mapping.conversation_id,
+                exc.status_code,
+                exc.response_text,
+            )
+
+        mapping.handoff_state = "human"
+        mapping.conversation_status = status
+        mapping.last_handoff_at = int(time.time())
+        self.store.upsert_mapping(mapping)
+
+        compact_reason = " ".join(str(reason or "").split()).strip()
+        if create_note and compact_reason:
+            try:
+                await self.client.create_private_note(
+                    conversation_id=int(mapping.conversation_id),
+                    content=f"Atendimento assumido por humano. Origem: {compact_reason[:240]}",
+                )
+            except ChatwootApiError as exc:
+                logger.warning(
+                    "Chatwoot human handoff private note failed: conversation_id=%s status=%s response=%s",
+                    mapping.conversation_id,
+                    exc.status_code,
+                    exc.response_text,
+                )
+        return True
+
     async def sync_incoming_whatsapp_message(
         self,
         *,
@@ -446,7 +504,7 @@ class ChatwootService:
         )
 
         if event in ("conversation_status_changed", "conversation_updated"):
-            return self._process_conversation_state_event(payload, conversation_id)
+            return self._process_conversation_state_event(payload, conversation_id, event=event)
         if event != "message_created":
             return "event"
         if message_id and self.store.is_processed_message(message_id):
@@ -701,7 +759,10 @@ class ChatwootService:
                 or "pending"
             )
 
-        handoff_state = "human" if conversation_status in ("open", "snoozed") else "ai"
+        if existing:
+            handoff_state = existing.handoff_state
+        else:
+            handoff_state = "ai"
 
         return ChatwootMapping(
             whatsapp_chat_id=chat_id,
@@ -893,9 +954,25 @@ class ChatwootService:
         self,
         payload: dict[str, Any],
         conversation_id: Optional[int],
+        *,
+        event: str = "",
     ) -> str:
         if not conversation_id:
             return "conversation_missing_id"
+        current = self.store.get_by_conversation_id(int(conversation_id))
+        if _payload_has_assignee(payload):
+            status = (
+                _extract_status_from_payload(payload)
+                or self.config.human_handoff_status
+                or "open"
+            )
+            self.store.update_handoff_state(
+                int(conversation_id),
+                handoff_state="human",
+                conversation_status=status,
+            )
+            return "conversation_assigned_human"
+
         status = _extract_status_from_payload(payload)
         if not status:
             return "conversation_status_missing"
@@ -914,7 +991,11 @@ class ChatwootService:
             )
             return "conversation_resolved_ai"
 
-        handoff_state = "human" if status in ("open", "snoozed") else "ai"
+        if status in ("open", "snoozed"):
+            status_changed = event == "conversation_status_changed" or _payload_status_was_changed(payload)
+            handoff_state = "human" if status_changed else ((current.handoff_state if current else "") or "ai")
+        else:
+            handoff_state = current.handoff_state if current else "ai"
         self.store.update_handoff_state(
             int(conversation_id),
             handoff_state=handoff_state,
@@ -1074,6 +1155,54 @@ def _extract_status_from_payload(payload: dict[str, Any]) -> str:
             if status:
                 return status
     return ""
+
+
+def _payload_status_was_changed(payload: dict[str, Any]) -> bool:
+    changed_attributes = payload.get("changed_attributes") or payload.get("changedAttributes") or []
+    if not isinstance(changed_attributes, list):
+        return False
+    for item in changed_attributes:
+        if isinstance(item, dict) and "status" in item:
+            return True
+    return False
+
+
+def _assignee_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        if "current_value" in value or "currentValue" in value:
+            return _assignee_value_present(value.get("current_value") or value.get("currentValue"))
+        return any(_assignee_value_present(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_assignee_value_present(item) for item in value)
+    text = str(value).strip().lower()
+    return text not in ("", "none", "null", "false", "0")
+
+
+def _payload_has_assignee(payload: dict[str, Any]) -> bool:
+    candidates: list[Any] = []
+    for container in (payload, payload.get("conversation") if isinstance(payload.get("conversation"), dict) else None):
+        if not isinstance(container, dict):
+            continue
+        for key in ("assignee_id", "assigneeId", "assignee", "assigned_agent", "assignedAgent"):
+            if key in container:
+                candidates.append(container.get(key))
+        meta = container.get("meta")
+        if isinstance(meta, dict):
+            for key in ("assignee", "assignee_id", "assigneeId"):
+                if key in meta:
+                    candidates.append(meta.get(key))
+
+    changed_attributes = payload.get("changed_attributes") or payload.get("changedAttributes") or []
+    if isinstance(changed_attributes, list):
+        for item in changed_attributes:
+            if not isinstance(item, dict):
+                continue
+            for key in ("assignee_id", "assigneeId", "assignee", "assigned_agent_id", "assignedAgentId"):
+                if key in item:
+                    candidates.append(item.get(key))
+    return any(_assignee_value_present(candidate) for candidate in candidates)
 
 
 def _normalize_handoff_text(content: str) -> str:

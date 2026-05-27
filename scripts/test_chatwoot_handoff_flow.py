@@ -94,7 +94,9 @@ from app.chatwoot_integration.client import ChatwootConfig  # noqa: E402
 from app.chatwoot_integration.service import ChatwootService  # noqa: E402
 from app.chatwoot_integration.store import ChatwootMapping, ChatwootStore  # noqa: E402
 from app.integrations.waha import (  # noqa: E402
+    extract_chat_id,
     extract_media_filename,
+    extract_phone_from_contact_info,
     extract_phone_from_payload,
     infer_chatwoot_file_type,
     normalize_phone,
@@ -114,9 +116,20 @@ class FakeMappingChatwootClient:
     def __init__(self) -> None:
         self.created_contacts: list[dict[str, Any]] = []
         self.incoming_messages: list[dict[str, Any]] = []
+        self.updated_contacts: list[dict[str, Any]] = []
+        self.search_contacts_result: list[dict[str, Any]] = []
+        self.contact_conversations: list[dict[str, Any]] = []
 
-    async def search_contacts(self, _query: str) -> list[dict[str, Any]]:
-        return []
+    async def search_contacts(self, query: str) -> list[dict[str, Any]]:
+        return [
+            contact
+            for contact in self.search_contacts_result
+            if query
+            and (
+                query == str(contact.get("identifier") or "")
+                or query == "".join(ch for ch in str(contact.get("phone_number") or "") if ch.isdigit())
+            )
+        ]
 
     async def create_contact(self, *, identifier: str, name: str, phone_number: str) -> dict[str, Any]:
         contact = {
@@ -134,6 +147,23 @@ class FakeMappingChatwootClient:
         self.created_contacts.append(contact)
         return contact
 
+    async def update_contact(
+        self,
+        contact_id: int,
+        *,
+        identifier: str = "",
+        name: str = "",
+        phone_number: str = "",
+    ) -> dict[str, Any]:
+        updated = {
+            "id": contact_id,
+            "identifier": identifier,
+            "name": name,
+            "phone_number": phone_number,
+        }
+        self.updated_contacts.append(updated)
+        return updated
+
     async def get_contactable_inboxes(self, _contact_id: int) -> list[dict[str, Any]]:
         return []
 
@@ -141,7 +171,7 @@ class FakeMappingChatwootClient:
         return {"contact_id": contact_id, "source_id": source_id, "inbox": {"id": 6}}
 
     async def list_contact_conversations(self, _contact_id: int) -> list[dict[str, Any]]:
-        return []
+        return self.contact_conversations
 
     async def create_conversation(self, *, contact_id: int, contact_source_id: str) -> dict[str, Any]:
         return {
@@ -235,6 +265,61 @@ def test_status_events_control_handoff(failures: list[str]) -> None:
         assert_equal(mapping.conversation_id if mapping else "missing", None, "resolved libera conversa", failures)
 
 
+def test_conversation_updated_open_does_not_enable_handoff(failures: list[str]) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = ChatwootService(ChatwootConfig(base_url="", state_db_path=os.path.join(tmpdir, "cw.db")))
+        service.store.upsert_mapping(
+            ChatwootMapping(
+                whatsapp_chat_id="555599069114@c.us",
+                phone="555599069114",
+                conversation_id=41,
+                handoff_state="ai",
+                conversation_status="pending",
+            )
+        )
+
+        ignored = service.extract_outbound_event(
+            {"event": "conversation_updated", "id": 41, "status": "open"}
+        )
+        assert_equal(ignored, "conversation_open_ai", "conversation_updated open preserva ia", failures)
+        if service.is_human_handoff_active("555599069114@c.us"):
+            failures.append("conversation_updated open nao deveria ativar handoff humano")
+
+        ignored = service.extract_outbound_event(
+            {"event": "conversation_status_changed", "id": 41, "status": "open"}
+        )
+        assert_equal(ignored, "conversation_open_human", "status_changed open ativa humano", failures)
+        if not service.is_human_handoff_active("555599069114@c.us"):
+            failures.append("conversation_status_changed open deveria ativar handoff humano")
+
+
+def test_assignment_event_enables_handoff(failures: list[str]) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = ChatwootService(ChatwootConfig(base_url="", state_db_path=os.path.join(tmpdir, "cw.db")))
+        service.store.upsert_mapping(
+            ChatwootMapping(
+                whatsapp_chat_id="555599069114@c.us",
+                phone="555599069114",
+                conversation_id=41,
+                handoff_state="ai",
+                conversation_status="pending",
+            )
+        )
+
+        ignored = service.extract_outbound_event(
+            {
+                "event": "conversation_updated",
+                "id": 41,
+                "changed_attributes": [
+                    {"assignee_id": {"previous_value": None, "current_value": 7}}
+                ],
+            }
+        )
+        assert_equal(ignored, "conversation_assigned_human", "atribuicao ativa humano", failures)
+        if not service.is_human_handoff_active("555599069114@c.us"):
+            failures.append("atribuicao no Chatwoot deveria ativar handoff humano")
+
+
 async def test_human_message_sets_handoff(failures: list[str]) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         service = ChatwootService(
@@ -295,6 +380,47 @@ async def test_human_message_sets_handoff(failures: list[str]) -> None:
         )
 
 
+async def test_manual_whatsapp_handoff_sets_human(failures: list[str]) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = ChatwootService(
+            ChatwootConfig(
+                base_url="https://chatwoot.example",
+                account_id="1",
+                api_access_token="token",
+                inbox_id="6",
+                state_db_path=os.path.join(tmpdir, "cw.db"),
+            )
+        )
+        fake_client = FakeChatwootClient()
+        service.client = fake_client  # type: ignore[assignment]
+        service.store.upsert_mapping(
+            ChatwootMapping(
+                whatsapp_chat_id="555599069114@c.us",
+                phone="555599069114",
+                conversation_id=91,
+                contact_source_id="555599069114@c.us",
+                conversation_status="pending",
+            )
+        )
+
+        activated = await service.activate_human_handoff(
+            chat_id="555599069114@c.us",
+            phone="555599069114",
+            contact_name="",
+            reason="mensagem manual enviada pelo WhatsApp",
+            create_note=False,
+        )
+        assert_equal(activated, True, "handoff manual whatsapp ativado", failures)
+        if not service.is_human_handoff_active("555599069114@c.us"):
+            failures.append("mensagem manual pelo WhatsApp deveria ativar humano")
+        assert_equal(
+            fake_client.status_updates,
+            [{"conversation_id": 91, "status": "open"}],
+            "status open apos whatsapp manual",
+            failures,
+        )
+
+
 async def test_whatsapp_phone_format_for_chatwoot_contact(failures: list[str]) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         service = ChatwootService(
@@ -326,14 +452,161 @@ async def test_whatsapp_phone_format_for_chatwoot_contact(failures: list[str]) -
         mapping = service.store.get_by_chat_id("5511999999999@c.us")
         assert_equal(mapping.phone if mapping else None, "5511999999999", "telefone persistido", failures)
 
-    lid_payload = {"from": "123456789012345@lid", "chatId": "551188887777@c.us"}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = ChatwootService(
+            ChatwootConfig(
+                base_url="https://chatwoot.example",
+                account_id="1",
+                api_access_token="token",
+                inbox_id="6",
+                state_db_path=os.path.join(tmpdir, "cw.db"),
+            )
+        )
+        fake_client = FakeMappingChatwootClient()
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="555599069114@c.us",
+            phone="555599069114",
+            contact_name="",
+            content="Oi",
+            message_id="wa-2",
+        )
+
+        assert_equal(
+            fake_client.created_contacts[0]["name"] if fake_client.created_contacts else None,
+            "+55 (55) 9906-9114",
+            "titulo Chatwoot com telefone brasileiro",
+            failures,
+        )
+        assert_equal(
+            fake_client.created_contacts[0]["identifier"] if fake_client.created_contacts else None,
+            "555599069114@c.us",
+            "identifier Chatwoot usa JID real",
+            failures,
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = ChatwootService(
+            ChatwootConfig(
+                base_url="https://chatwoot.example",
+                account_id="1",
+                api_access_token="token",
+                inbox_id="6",
+                state_db_path=os.path.join(tmpdir, "cw.db"),
+            )
+        )
+        fake_client = FakeMappingChatwootClient()
+        fake_client.search_contacts_result = [
+            {
+                "id": 22,
+                "identifier": "555599069114@c.us",
+                "name": "+55 (55) 9906-9114",
+                "phone_number": "+555599069114",
+                "contact_inboxes": [
+                    {
+                        "source_id": "555599069114@c.us",
+                        "inbox": {"id": 6},
+                    }
+                ],
+            }
+        ]
+        fake_client.contact_conversations = [{"id": 88, "inbox_id": 6, "status": "open"}]
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="555599069114@c.us",
+            phone="555599069114",
+            contact_name="",
+            content="Oi em conversa aberta",
+            message_id="wa-open",
+        )
+        if service.is_human_handoff_active("555599069114@c.us"):
+            failures.append("conversa open descoberta no Chatwoot nao deve bloquear IA sem handoff explicito")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = ChatwootService(
+            ChatwootConfig(
+                base_url="https://chatwoot.example",
+                account_id="1",
+                api_access_token="token",
+                inbox_id="6",
+                state_db_path=os.path.join(tmpdir, "cw.db"),
+            )
+        )
+        fake_client = FakeMappingChatwootClient()
+        fake_client.search_contacts_result = [
+            {
+                "id": 18,
+                "identifier": "71330884006023@lid",
+                "name": "71330884006023@lid",
+                "phone_number": "+555599069114",
+                "contact_inboxes": [
+                    {
+                        "source_id": "71330884006023@lid",
+                        "inbox": {"id": 6},
+                    }
+                ],
+            }
+        ]
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="555599069114@c.us",
+            phone="555599069114",
+            contact_name="",
+            content="Oi de novo",
+            message_id="wa-3",
+        )
+
+        assert_equal(
+            fake_client.updated_contacts,
+            [
+                {
+                    "id": 18,
+                    "identifier": "555599069114@c.us",
+                    "name": "+55 (55) 9906-9114",
+                    "phone_number": "+555599069114",
+                }
+            ],
+            "corrige contato antigo criado com lid",
+            failures,
+        )
+
+    lid_payload = {
+        "from": "71330884006023@lid",
+        "jid": "555599069114@c.us",
+        "contact": {"id": "71330884006023@lid"},
+    }
     assert_equal(
-        extract_phone_from_payload(lid_payload, "123456789012345@lid"),
-        "551188887777",
+        extract_chat_id(lid_payload),
+        "555599069114@c.us",
+        "chat id prefere jid real quando from vem como lid",
+        failures,
+    )
+    assert_equal(
+        extract_phone_from_payload(lid_payload, "71330884006023@lid"),
+        "555599069114",
         "telefone preferido quando from vem como lid",
         failures,
     )
-    assert_equal(normalize_phone("123456789012345@lid"), "", "lid nao vira telefone", failures)
+    lid_only_payload = {
+        "from": "71330884006023@lid",
+        "contact": {"id": "2654390497411"},
+    }
+    assert_equal(
+        extract_phone_from_payload(lid_only_payload, "71330884006023@lid"),
+        "",
+        "id numerico de lid nao vira telefone",
+        failures,
+    )
+    assert_equal(
+        extract_phone_from_contact_info({"id": "555599069114@c.us"}),
+        "555599069114",
+        "telefone vindo da consulta WAHA contact info",
+        failures,
+    )
+    assert_equal(normalize_phone("71330884006023@lid"), "", "lid nao vira telefone", failures)
 
 
 def test_media_helpers(failures: list[str]) -> None:
@@ -355,7 +628,10 @@ async def main() -> int:
     failures: list[str] = []
     test_store_migrates_old_schema(failures)
     test_status_events_control_handoff(failures)
+    test_conversation_updated_open_does_not_enable_handoff(failures)
+    test_assignment_event_enables_handoff(failures)
     await test_human_message_sets_handoff(failures)
+    await test_manual_whatsapp_handoff_sets_human(failures)
     await test_whatsapp_phone_format_for_chatwoot_contact(failures)
     test_media_helpers(failures)
 

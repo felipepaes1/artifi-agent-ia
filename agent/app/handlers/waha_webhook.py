@@ -37,6 +37,7 @@ from ..core.state import (
     RECENT_MESSAGE_KEYS,
     RECENT_POLL_SENT,
     RECENT_OUTBOUND_MESSAGE_IDS,
+    RECENT_OUTBOUND_TEXT_KEYS,
     LAST_SCHEDULE_OPTIONS,
     clear_profile_state,
     coalesce_user_message,
@@ -64,12 +65,14 @@ from ..integrations.waha import (
     extract_phone_from_payload,
     extract_timestamp,
     get_contact_name,
+    get_contact_phone,
     infer_chatwoot_file_type,
     is_audio_payload,
     is_from_me_payload,
     is_non_text_media,
     message_fingerprint,
     name_from_payload,
+    outbound_text_key,
     send_profile_poll,
     transcribe_audio,
 )
@@ -497,17 +500,6 @@ def build_waha_router() -> APIRouter:
             return await handle_poll_vote(data)
         if payload.get("poll") and (payload.get("vote") or payload.get("pollVote")):
             return await handle_poll_vote(data)
-        if from_me:
-            log_webhook_debug(
-                "from_me",
-                {
-                    "event": event,
-                    "event_id": event_id,
-                    "chat_id": str(chat_id) if chat_id else None,
-                    "message_id": message_id,
-                },
-            )
-            return {"ok": True, "ignored": "fromMe"}
         if has_recent_key(
             RECENT_OUTBOUND_MESSAGE_IDS,
             message_id,
@@ -562,7 +554,51 @@ def build_waha_router() -> APIRouter:
 
         chatwoot_service = get_chatwoot_service()
         chatwoot_message_id = message_id or fingerprint or ""
+        outbound_text_echo = has_recent_key(
+            RECENT_OUTBOUND_TEXT_KEYS,
+            outbound_text_key(str(chat_id), raw_body),
+            OUTBOUND_ECHO_TTL_SECONDS,
+        )
         whatsapp_phone = extract_phone_from_payload(payload, str(chat_id))
+        if not whatsapp_phone and str(chat_id).endswith("@lid"):
+            whatsapp_phone = await get_contact_phone(str(chat_id))
+            if not whatsapp_phone:
+                logger.warning("Could not resolve WhatsApp phone for LID chat_id=%s", chat_id)
+
+        if from_me:
+            if outbound_text_echo:
+                log_webhook_debug(
+                    "outbound_echo_text",
+                    {
+                        "event": event,
+                        "event_id": event_id,
+                        "chat_id": str(chat_id),
+                        "message_id": message_id,
+                    },
+                )
+                return {"ok": True, "ignored": "outbound_echo_text"}
+            manual_content = raw_body or build_chatwoot_media_content(payload)
+            await chatwoot_service.activate_human_handoff(
+                chat_id=str(chat_id),
+                phone=whatsapp_phone,
+                contact_name=name_from_payload(payload) or "",
+                reason="mensagem manual enviada pelo WhatsApp",
+                create_note=bool(not raw_body),
+            )
+            if raw_body:
+                await chatwoot_service.sync_outgoing_whatsapp_message(
+                    chat_id=str(chat_id),
+                    phone=whatsapp_phone,
+                    contact_name=name_from_payload(payload) or "",
+                    content=raw_body,
+                    message_id=chatwoot_message_id,
+                )
+            logger.info(
+                "AI handoff activated by manual WhatsApp message: chat_id=%s content=%s",
+                chat_id,
+                manual_content[:120] if manual_content else "",
+            )
+            return {"ok": True, "handoff": "manual_whatsapp_from_me"}
 
         if is_non_text_media(payload):
             media_content = build_chatwoot_media_content(payload)
@@ -597,6 +633,7 @@ def build_waha_router() -> APIRouter:
                 )
                 return {"ok": True, "signal_confirmed": True}
             if chatwoot_service.is_human_handoff_active(str(chat_id)):
+                logger.info("AI reply suppressed by Chatwoot handoff: chat_id=%s type=media", chat_id)
                 return {"ok": True, "handoff": "human_media"}
             handed = await chatwoot_service.handoff_to_human(
                 chat_id=str(chat_id),
@@ -640,6 +677,7 @@ def build_waha_router() -> APIRouter:
                 message_id=chatwoot_message_id,
             )
             if chatwoot_service.is_human_handoff_active(str(chat_id)):
+                logger.info("AI reply suppressed by Chatwoot handoff: chat_id=%s type=audio", chat_id)
                 return {"ok": True, "handoff": "human_audio"}
             if not transcription:
                 active_turn = next_chat_turn(str(chat_id))
@@ -674,6 +712,7 @@ def build_waha_router() -> APIRouter:
             )
 
         if chatwoot_service.is_human_handoff_active(str(chat_id)):
+            logger.info("AI reply suppressed by Chatwoot handoff: chat_id=%s type=text", chat_id)
             return {"ok": True, "handoff": "human_text"}
 
         if chatwoot_service.should_request_human_handoff(body):
