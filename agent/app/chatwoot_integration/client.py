@@ -74,6 +74,32 @@ class ChatwootClient:
 
         return {}
 
+    async def update_contact(
+        self,
+        contact_id: int,
+        *,
+        identifier: str = "",
+        name: str = "",
+        phone_number: str = "",
+    ) -> dict[str, Any]:
+        if not self.config.account_mode or not contact_id:
+            return {}
+        body: dict[str, Any] = {}
+        if identifier:
+            body["identifier"] = identifier
+        if name:
+            body["name"] = name
+        if phone_number:
+            body["phone_number"] = phone_number
+        if not body:
+            return {}
+        payload = await self._request_account(
+            "PUT",
+            f"/contacts/{contact_id}",
+            json=body,
+        )
+        return self._unwrap_dict(payload, "contact")
+
     async def create_contact_inbox(self, contact_id: int, source_id: str) -> dict[str, Any]:
         if not self.config.account_mode or not contact_id or not source_id:
             return {}
@@ -341,6 +367,8 @@ class ChatwootClient:
                 response.status_code,
                 response.text,
             )
+        if response.status_code == 204:
+            return {}
         try:
             data = response.json()
         except ValueError:

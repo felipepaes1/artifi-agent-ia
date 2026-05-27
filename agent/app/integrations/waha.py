@@ -50,7 +50,7 @@ def name_from_payload(payload: Dict[str, Any]) -> Optional[str]:
         return None
     for key in ("pushName", "pushname", "notifyName", "name", "senderName", "contactName"):
         value = (payload.get(key) or "").strip()
-        if value:
+        if value and not _looks_like_technical_whatsapp_name(value):
             return value
     return None
 
@@ -233,10 +233,28 @@ def _looks_like_whatsapp_phone_id(value: Any) -> bool:
     return text.endswith("@c.us") or text.endswith("@s.whatsapp.net")
 
 
+def _looks_like_technical_whatsapp_name(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if "@lid" in text or "@c.us" in text or "@s.whatsapp.net" in text:
+        return True
+    return text.startswith("whatsapp chat id") or text.startswith("whatsapp lid")
+
+
 def extract_chat_id(payload: Dict[str, Any]) -> Optional[str]:
     first_candidate = ""
     for item in _payload_dicts(payload):
-        for key in ("from", "chatId", "chat_id", "remoteJid", "remote_jid"):
+        for key in (
+            "from",
+            "chatId",
+            "chat_id",
+            "jid",
+            "whatsappJid",
+            "whatsapp_jid",
+            "remoteJid",
+            "remote_jid",
+        ):
             value = str(item.get(key) or "").strip()
             if not value:
                 continue
@@ -256,8 +274,20 @@ def extract_chat_id(payload: Dict[str, Any]) -> Optional[str]:
                     first_candidate = value
         id_obj = item.get("id")
         if isinstance(id_obj, dict):
-            for key in ("remote", "remoteJid", "remote_jid", "participant"):
+            for key in ("remote", "remoteJid", "remote_jid", "participant", "jid"):
                 value = str(id_obj.get(key) or "").strip()
+                if not value:
+                    continue
+                if _looks_like_whatsapp_phone_id(value):
+                    return value
+                if not first_candidate:
+                    first_candidate = value
+        for nested_key in ("sender", "contact", "chat"):
+            nested = item.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            for key in ("jid", "whatsappJid", "whatsapp_jid", "id"):
+                value = str(nested.get(key) or "").strip()
                 if not value:
                     continue
                 if _looks_like_whatsapp_phone_id(value):
@@ -288,6 +318,9 @@ def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = 
             "from",
             "chatId",
             "chat_id",
+            "jid",
+            "whatsappJid",
+            "whatsapp_jid",
             "author",
             "participant",
             "remoteJid",
@@ -308,7 +341,7 @@ def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = 
             nested = item.get(nested_key)
             if not isinstance(nested, dict):
                 continue
-            for key in ("phone", "phoneNumber", "phone_number", "id", "jid"):
+            for key in ("phone", "phoneNumber", "phone_number", "id", "jid", "whatsappJid", "whatsapp_jid"):
                 value = nested.get(key)
                 if _looks_like_whatsapp_phone_id(value):
                     return normalize_phone(str(value))

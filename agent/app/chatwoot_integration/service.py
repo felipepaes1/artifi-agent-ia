@@ -571,19 +571,32 @@ class ChatwootService:
         contact_name: str,
     ) -> Optional[ChatwootMapping]:
         identifier = _preferred_contact_identifier(chat_id, phone)
+        contact_display_name = _contact_display_name(contact_name, phone, identifier)
         existing = self.store.get_by_chat_id(chat_id)
         if existing and _normalize_chatwoot_status(existing.conversation_status) == "resolved":
             existing.conversation_id = None
         if existing and existing.contact_source_id and existing.conversation_id:
+            existing_name = existing.contact_name
             if (
-                (contact_name and contact_name != existing.contact_name)
+                (contact_display_name and contact_display_name != existing.contact_name)
                 or (phone and phone != existing.phone)
                 or (identifier and identifier != existing.identifier)
             ):
-                existing.contact_name = contact_name or existing.contact_name
+                existing.contact_name = contact_display_name or existing.contact_name
                 existing.phone = phone or existing.phone
                 existing.identifier = identifier or existing.identifier
                 self.store.upsert_mapping(existing)
+            if (
+                self.config.account_mode
+                and existing.contact_id
+                and _should_repair_contact_name(existing_name, contact_name, contact_display_name)
+            ):
+                await self._update_account_contact(
+                    contact_id=int(existing.contact_id),
+                    identifier=identifier,
+                    display_name=contact_display_name,
+                    phone_number=_format_phone_number(phone),
+                )
             return existing
 
         if self.config.account_mode:
@@ -618,6 +631,8 @@ class ChatwootService:
         contact_id = existing.contact_id if existing else None
         contact_source_id = existing.contact_source_id if existing else ""
         phone_number = _format_phone_number(phone)
+        display_name = _contact_display_name(contact_name, phone, identifier)
+        picked_contact: dict[str, Any] = {}
 
         if not contact_id:
             contacts = await self.client.search_contacts(identifier)
@@ -625,17 +640,33 @@ class ChatwootService:
                 contacts.extend(await self.client.search_contacts(phone))
             contact = self._pick_contact(contacts, identifier=identifier, phone=phone)
             if contact:
+                picked_contact = contact
                 contact_id = _coerce_int(contact.get("id"))
                 contact_source_id = self._extract_contact_source_id(contact) or contact_source_id
 
         if not contact_id:
             created_contact = await self.client.create_contact(
                 identifier=identifier,
-                name=contact_name,
+                name=display_name,
                 phone_number=phone_number,
             )
+            picked_contact = created_contact
             contact_id = _coerce_int(created_contact.get("id"))
             contact_source_id = self._extract_contact_source_id(created_contact)
+        elif _should_update_existing_contact(
+            picked_contact=picked_contact,
+            stored_name=existing.contact_name if existing else "",
+            requested_name=contact_name,
+            display_name=display_name,
+            phone_number=phone_number,
+            identifier=identifier,
+        ):
+            await self._update_account_contact(
+                contact_id=int(contact_id),
+                identifier=identifier,
+                display_name=display_name,
+                phone_number=phone_number,
+            )
 
         if contact_id and not contact_source_id:
             contact_source_id = self._pick_contactable_source_id(
@@ -675,7 +706,7 @@ class ChatwootService:
         return ChatwootMapping(
             whatsapp_chat_id=chat_id,
             phone=phone,
-            contact_name=contact_name or (existing.contact_name if existing else ""),
+            contact_name=display_name or (existing.contact_name if existing else ""),
             contact_id=contact_id,
             contact_source_id=contact_source_id,
             conversation_id=conversation_id,
@@ -701,11 +732,12 @@ class ChatwootService:
         contact_id = existing.contact_id if existing else None
         contact_source_id = existing.contact_source_id if existing else ""
         phone_number = _format_phone_number(phone)
+        display_name = _contact_display_name(contact_name, phone, identifier)
 
         if not contact_source_id:
             contact = await self.client.create_contact(
                 identifier=identifier,
-                name=contact_name,
+                name=display_name,
                 phone_number=phone_number,
             )
             contact_id = _coerce_int(contact.get("id")) or contact_id
@@ -724,7 +756,7 @@ class ChatwootService:
         return ChatwootMapping(
             whatsapp_chat_id=chat_id,
             phone=phone,
-            contact_name=contact_name or (existing.contact_name if existing else ""),
+            contact_name=display_name or (existing.contact_name if existing else ""),
             contact_id=contact_id,
             contact_source_id=contact_source_id,
             conversation_id=conversation_id,
@@ -833,6 +865,29 @@ class ChatwootService:
             if target_inbox_id and inbox_id == target_inbox_id:
                 return source_id
         return fallback
+
+    async def _update_account_contact(
+        self,
+        *,
+        contact_id: int,
+        identifier: str,
+        display_name: str,
+        phone_number: str,
+    ) -> None:
+        try:
+            await self.client.update_contact(
+                int(contact_id),
+                identifier=identifier,
+                name=display_name,
+                phone_number=phone_number,
+            )
+        except ChatwootApiError as exc:
+            logger.warning(
+                "Chatwoot contact update failed: contact_id=%s status=%s response=%s",
+                contact_id,
+                exc.status_code,
+                exc.response_text,
+            )
 
     def _process_conversation_state_event(
         self,
@@ -1048,6 +1103,72 @@ def _preferred_contact_identifier(chat_id: str, phone: str) -> str:
     if phone_chat_id:
         return phone_chat_id
     return whatsapp_chat_id or str(chat_id or "").strip()
+
+
+def _is_technical_contact_name(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if "@lid" in text or "@c.us" in text or "@s.whatsapp.net" in text:
+        return True
+    if text.startswith("whatsapp chat id") or text.startswith("whatsapp lid"):
+        return True
+    return False
+
+
+def _format_phone_display(phone: str) -> str:
+    digits = _normalize_phone(phone)
+    if not digits:
+        return ""
+    if digits.startswith("55") and len(digits) == 12:
+        return f"+55 ({digits[2:4]}) {digits[4:8]}-{digits[8:12]}"
+    if digits.startswith("55") and len(digits) == 13:
+        return f"+55 ({digits[2:4]}) {digits[4:9]}-{digits[9:13]}"
+    formatted = _format_phone_number(digits)
+    return formatted or digits
+
+
+def _contact_display_name(contact_name: str, phone: str, identifier: str) -> str:
+    cleaned_name = " ".join(str(contact_name or "").split()).strip()
+    if cleaned_name and not _is_technical_contact_name(cleaned_name):
+        return cleaned_name
+    phone_display = _format_phone_display(phone)
+    if phone_display:
+        return phone_display
+    return _format_phone_number(phone) or identifier
+
+
+def _should_repair_contact_name(
+    existing_name: str,
+    requested_name: str,
+    display_name: str,
+) -> bool:
+    if not display_name:
+        return False
+    if requested_name and not _is_technical_contact_name(requested_name):
+        return True
+    return _is_technical_contact_name(existing_name) or not str(existing_name or "").strip()
+
+
+def _should_update_existing_contact(
+    *,
+    picked_contact: dict[str, Any],
+    stored_name: str,
+    requested_name: str,
+    display_name: str,
+    phone_number: str,
+    identifier: str,
+) -> bool:
+    current_name = str((picked_contact or {}).get("name") or stored_name or "").strip()
+    current_phone = _format_phone_number(str((picked_contact or {}).get("phone_number") or ""))
+    current_identifier = str((picked_contact or {}).get("identifier") or "").strip()
+    if _should_repair_contact_name(current_name, requested_name, display_name):
+        return True
+    if phone_number and current_phone != phone_number:
+        return True
+    if identifier and current_identifier and _is_technical_contact_name(current_identifier):
+        return True
+    return False
 
 
 def _format_phone_number(phone: str) -> str:
