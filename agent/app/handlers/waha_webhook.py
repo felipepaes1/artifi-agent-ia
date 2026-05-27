@@ -69,6 +69,7 @@ from ..integrations.waha import (
     infer_chatwoot_file_type,
     is_audio_payload,
     is_from_me_payload,
+    is_lid_or_technical_chat_id,
     is_non_text_media,
     message_fingerprint,
     name_from_payload,
@@ -560,7 +561,7 @@ def build_waha_router() -> APIRouter:
             OUTBOUND_ECHO_TTL_SECONDS,
         )
         whatsapp_phone = extract_phone_from_payload(payload, str(chat_id))
-        if not whatsapp_phone and str(chat_id).endswith("@lid"):
+        if not whatsapp_phone and is_lid_or_technical_chat_id(str(chat_id)):
             whatsapp_phone = await get_contact_phone(str(chat_id))
             if not whatsapp_phone:
                 logger.warning("Could not resolve WhatsApp phone for LID chat_id=%s", chat_id)
@@ -743,6 +744,12 @@ def build_waha_router() -> APIRouter:
             return {"ok": True, "queued": True}
         body, is_audio = coalesced
         active_turn = next_chat_turn(str(chat_id))
+        logger.info(
+            "AI reply started: chat_id=%s phone=%s body_len=%s",
+            chat_id,
+            whatsapp_phone,
+            len(body or ""),
+        )
         log_webhook_debug(
             "coalesced",
             {
@@ -767,6 +774,11 @@ def build_waha_router() -> APIRouter:
             if not profile_id:
                 if state.get("poll_id"):
                     update_profile_state(str(chat_id), pending_message=body)
+                    logger.info(
+                        "AI reply awaiting profile selection: chat_id=%s poll_id=%s",
+                        chat_id,
+                        state.get("poll_id"),
+                    )
                     await send_text_parts(
                         str(chat_id),
                         "Para continuar, escolha um perfil na enquete acima, por favor.",
@@ -775,6 +787,7 @@ def build_waha_router() -> APIRouter:
                     return {"ok": True, "awaiting_poll": True}
                 if is_duplicate_key(RECENT_POLL_SENT, str(chat_id), POLL_THROTTLE_SECONDS):
                     update_profile_state(str(chat_id), pending_message=body)
+                    logger.info("AI reply waiting existing profile poll: chat_id=%s", chat_id)
                     await send_text_parts(
                         str(chat_id),
                         "Ja enviei a enquete acima. Pode escolher um perfil para continuarmos, por favor?",
@@ -784,7 +797,13 @@ def build_waha_router() -> APIRouter:
                 poll_id = await send_profile_poll(str(chat_id))
                 update_profile_state(str(chat_id), poll_id=poll_id, pending_message=body)
                 if poll_id:
+                    logger.info(
+                        "AI reply sent profile poll: chat_id=%s poll_id=%s",
+                        chat_id,
+                        poll_id,
+                    )
                     return {"ok": True, "poll_sent": True}
+                logger.warning("Profile poll failed, falling back to default profile: chat_id=%s", chat_id)
                 profile_id = PROFILE_DEFAULT_ID or PROMPT_PROFILE or None
                 update_profile_state(str(chat_id), profile_id=profile_id, poll_id=None, pending_message=None)
 

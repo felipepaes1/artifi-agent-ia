@@ -1217,11 +1217,16 @@ def _normalize_phone(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    if text.endswith("@lid"):
+    lowered = text.lower()
+    if lowered.endswith("@lid"):
         return ""
     base = text.split("@", 1)[0]
     digits = "".join(ch for ch in base if ch.isdigit())
-    return digits or base
+    if lowered.endswith("@c.us") or lowered.endswith("@s.whatsapp.net"):
+        return digits
+    if digits.startswith("55") and len(digits) in (12, 13):
+        return digits
+    return ""
 
 
 def _preferred_contact_identifier(chat_id: str, phone: str) -> str:
@@ -1239,6 +1244,8 @@ def _is_technical_contact_name(value: str) -> bool:
     if not text:
         return False
     if "@lid" in text or "@c.us" in text or "@s.whatsapp.net" in text:
+        return True
+    if text.isdigit() and not text.startswith("55"):
         return True
     if text.startswith("whatsapp chat id") or text.startswith("whatsapp lid"):
         return True
@@ -1264,7 +1271,12 @@ def _contact_display_name(contact_name: str, phone: str, identifier: str) -> str
     phone_display = _format_phone_display(phone)
     if phone_display:
         return phone_display
-    return _format_phone_number(phone) or identifier
+    fallback = _format_phone_number(phone)
+    if fallback:
+        return fallback
+    if identifier and not _is_technical_contact_name(identifier):
+        return identifier
+    return "WhatsApp"
 
 
 def _should_repair_contact_name(
@@ -1314,7 +1326,12 @@ def _to_whatsapp_chat_id(value: Any) -> str:
     if not text:
         return ""
     if "@" in text:
-        return text
+        lowered = text.lower()
+        if lowered.endswith("@c.us"):
+            return text
+        if lowered.endswith("@s.whatsapp.net"):
+            return f"{text.split('@', 1)[0]}@c.us"
+        return ""
     digits = _normalize_phone(text)
     if digits:
         return f"{digits}@c.us"

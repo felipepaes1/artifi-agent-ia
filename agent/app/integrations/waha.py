@@ -234,6 +234,18 @@ def _looks_like_whatsapp_phone_id(value: Any) -> bool:
     return text.endswith("@c.us") or text.endswith("@s.whatsapp.net")
 
 
+def is_lid_or_technical_chat_id(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if text.endswith("@lid"):
+        return True
+    if "@" in text:
+        return False
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return bool(digits and digits == text and not digits.startswith("55"))
+
+
 def _extract_brazil_phone_digits(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -373,7 +385,7 @@ def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = 
             if _looks_like_whatsapp_phone_id(nested_id):
                 return normalize_phone(str(nested_id))
 
-    return normalize_phone(fallback_chat_id)
+    return _extract_brazil_phone_digits(fallback_chat_id)
 
 
 def extract_phone_from_contact_info(data: Dict[str, Any]) -> str:
