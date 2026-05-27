@@ -24,6 +24,8 @@ class ChatwootConfig:
     inbox_identifier: str = ""
     webhook_secret: str = ""
     state_db_path: str = "chatwoot_state.db"
+    ai_conversation_status: str = "pending"
+    human_handoff_status: str = "open"
 
     @property
     def account_mode(self) -> bool:
@@ -107,7 +109,7 @@ class ChatwootClient:
             body = {
                 "source_id": contact_source_id,
                 "inbox_id": int(self.config.inbox_id),
-                "status": "open",
+                "status": self.config.ai_conversation_status or "pending",
             }
             if contact_id:
                 body["contact_id"] = int(contact_id)
@@ -170,6 +172,46 @@ class ChatwootClient:
 
         return {}
 
+    async def create_incoming_attachment_message(
+        self,
+        *,
+        conversation_id: int,
+        content: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+        file_type: str,
+        echo_id: str = "",
+    ) -> dict[str, Any]:
+        if not self.config.account_mode or not file_bytes:
+            return {}
+
+        data = {
+            "content": content or filename or "Arquivo recebido",
+            "message_type": "incoming",
+            "private": "false",
+            "file_type": file_type or "file",
+        }
+        if echo_id:
+            data["echo_id"] = echo_id
+        files = [
+            (
+                "attachments[]",
+                (
+                    filename or "attachment",
+                    file_bytes,
+                    content_type or "application/octet-stream",
+                ),
+            )
+        ]
+        payload = await self._request_account_multipart(
+            "POST",
+            f"/conversations/{conversation_id}/messages",
+            data=data,
+            files=files,
+        )
+        return self._unwrap_dict(payload, "message")
+
     async def create_outgoing_message(
         self,
         *,
@@ -195,6 +237,41 @@ class ChatwootClient:
         )
         return self._unwrap_dict(payload, "message")
 
+    async def create_private_note(
+        self,
+        *,
+        conversation_id: int,
+        content: str,
+    ) -> dict[str, Any]:
+        if not self.config.account_mode or not content:
+            return {}
+        payload = await self._request_account(
+            "POST",
+            f"/conversations/{conversation_id}/messages",
+            json={
+                "content": content,
+                "message_type": "outgoing",
+                "private": True,
+                "content_type": "text",
+            },
+        )
+        return self._unwrap_dict(payload, "message")
+
+    async def update_conversation_status(
+        self,
+        *,
+        conversation_id: int,
+        status: str,
+    ) -> dict[str, Any]:
+        if not self.config.account_mode or not conversation_id or not status:
+            return {}
+        payload = await self._request_account(
+            "POST",
+            f"/conversations/{conversation_id}/toggle_status",
+            json={"status": status},
+        )
+        return self._unwrap_dict(payload, "payload")
+
     async def _request_account(
         self,
         method: str,
@@ -209,6 +286,31 @@ class ChatwootClient:
             "api_access_token": self.config.api_access_token,
         }
         return await self._request(method, url, headers=headers, json=json, params=params)
+
+    async def _request_account_multipart(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, Any],
+        files: list[tuple[str, tuple[str, bytes, str]]],
+    ) -> dict[str, Any]:
+        url = f"{self.config.base_url}/api/v1/accounts/{self.config.account_id}{path}"
+        headers = {"api_access_token": self.config.api_access_token}
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.request(method, url, headers=headers, data=data, files=files)
+        if response.status_code >= 400:
+            raise ChatwootApiError(
+                f"Chatwoot request failed: {method} {url}",
+                response.status_code,
+                response.text,
+            )
+        try:
+            data_json = response.json()
+        except ValueError:
+            logger.warning("Chatwoot returned a non-JSON response for %s %s", method, url)
+            return {}
+        return data_json if isinstance(data_json, dict) else {"payload": data_json}
 
     async def _request_public(
         self,

@@ -2,9 +2,11 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import threading
 import time
 import contextvars
+import unicodedata
 from typing import Any, Awaitable, Callable, Optional
 
 from .client import ChatwootApiError, ChatwootClient, ChatwootConfig
@@ -100,6 +102,87 @@ class ChatwootService:
         normalized = signature.removeprefix("sha256=").strip()
         return hmac.compare_digest(normalized, digest)
 
+    def is_human_handoff_active(self, chat_id: str) -> bool:
+        mapping = self.store.get_by_chat_id(str(chat_id or "").strip())
+        if not mapping:
+            return False
+        status = _normalize_chatwoot_status(mapping.conversation_status)
+        if status in ("pending", "resolved"):
+            return False
+        return mapping.handoff_state == "human"
+
+    def should_request_human_handoff(self, content: str) -> bool:
+        text = _normalize_handoff_text(content)
+        if not text:
+            return False
+        patterns = (
+            r"\bfalar com (um |uma |o |a )?(atendente|humano|pessoa|recepcao|equipe)\b",
+            r"\bquero (um |uma |o |a )?(atendente|humano|pessoa|recepcao)\b",
+            r"\bpreciso (de |falar com )?(um |uma |o |a )?(atendente|humano|pessoa|recepcao|equipe)\b",
+            r"\bme (passa|passe|transfer(e|ir)|encaminha|encaminhe) (para|pra) (um |uma |o |a )?(atendente|humano|pessoa|recepcao|equipe)\b",
+            r"\bchamar (um |uma |o |a )?(atendente|humano|pessoa|recepcao|equipe)\b",
+        )
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    async def handoff_to_human(
+        self,
+        *,
+        chat_id: str,
+        phone: str,
+        contact_name: str,
+        reason: str = "",
+    ) -> bool:
+        if not self.config.account_mode:
+            return False
+        chat_id = str(chat_id or "").strip()
+        if not chat_id:
+            return False
+        phone_digits = _normalize_phone(phone) or _normalize_phone(chat_id)
+        mapping = await self._ensure_mapping(
+            chat_id=chat_id,
+            phone=phone_digits,
+            contact_name=contact_name,
+        )
+        if not mapping or not mapping.conversation_id:
+            return False
+
+        status = self.config.human_handoff_status or "open"
+        try:
+            await self.client.update_conversation_status(
+                conversation_id=int(mapping.conversation_id),
+                status=status,
+            )
+        except ChatwootApiError as exc:
+            logger.warning(
+                "Chatwoot handoff status update failed: conversation_id=%s status=%s response=%s",
+                mapping.conversation_id,
+                exc.status_code,
+                exc.response_text,
+            )
+
+        mapping.handoff_state = "human"
+        mapping.conversation_status = status
+        mapping.last_handoff_at = int(time.time())
+        self.store.upsert_mapping(mapping)
+
+        note = "Atendimento transferido para humano pela IA."
+        compact_reason = " ".join(str(reason or "").split()).strip()
+        if compact_reason:
+            note = f"{note} Motivo: {compact_reason[:240]}"
+        try:
+            await self.client.create_private_note(
+                conversation_id=int(mapping.conversation_id),
+                content=note,
+            )
+        except ChatwootApiError as exc:
+            logger.warning(
+                "Chatwoot handoff private note failed: conversation_id=%s status=%s response=%s",
+                mapping.conversation_id,
+                exc.status_code,
+                exc.response_text,
+            )
+        return True
+
     async def sync_incoming_whatsapp_message(
         self,
         *,
@@ -168,6 +251,95 @@ class ChatwootService:
             )
         except Exception as exc:
             logger.exception("Chatwoot sync failed unexpectedly: %s", exc)
+
+    async def sync_incoming_whatsapp_media(
+        self,
+        *,
+        chat_id: str,
+        phone: str,
+        contact_name: str,
+        content: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+        file_type: str,
+        message_id: str = "",
+    ) -> None:
+        if not self.sync_enabled():
+            return
+        chat_id = str(chat_id or "").strip()
+        content = str(content or "").strip() or filename or "Arquivo recebido"
+        if not chat_id:
+            return
+        if not file_bytes or not self.config.account_mode:
+            await self.sync_incoming_whatsapp_message(
+                chat_id=chat_id,
+                phone=phone,
+                contact_name=contact_name,
+                content=content,
+                message_id=message_id,
+            )
+            return
+
+        phone_digits = _normalize_phone(phone) or _normalize_phone(chat_id)
+        try:
+            mapping = await self._ensure_mapping(
+                chat_id=chat_id,
+                phone=phone_digits,
+                contact_name=contact_name,
+            )
+            if not mapping or not mapping.conversation_id:
+                return
+            try:
+                await self.client.create_incoming_attachment_message(
+                    conversation_id=int(mapping.conversation_id),
+                    content=content,
+                    file_bytes=file_bytes,
+                    filename=filename or "attachment",
+                    content_type=content_type or "application/octet-stream",
+                    file_type=file_type or "file",
+                    echo_id=message_id,
+                )
+            except ChatwootApiError as exc:
+                if exc.status_code != 404:
+                    raise
+                logger.warning(
+                    "Chatwoot media conversation stale, recreating mapping for chat_id=%s status=%s",
+                    chat_id,
+                    exc.status_code,
+                )
+                self.store.clear_mapping(chat_id)
+                mapping = await self._ensure_mapping(
+                    chat_id=chat_id,
+                    phone=phone_digits,
+                    contact_name=contact_name,
+                )
+                if not mapping or not mapping.conversation_id:
+                    return
+                await self.client.create_incoming_attachment_message(
+                    conversation_id=int(mapping.conversation_id),
+                    content=content,
+                    file_bytes=file_bytes,
+                    filename=filename or "attachment",
+                    content_type=content_type or "application/octet-stream",
+                    file_type=file_type or "file",
+                    echo_id=message_id,
+                )
+            logger.info(
+                "Chatwoot inbound media sync: conversation_id=%s phone=%s filename=%s file_type=%s",
+                mapping.conversation_id,
+                mapping.phone or phone_digits,
+                filename,
+                file_type,
+            )
+        except ChatwootApiError as exc:
+            logger.warning(
+                "Chatwoot media sync failed: status=%s response=%s",
+                exc.status_code,
+                exc.response_text,
+            )
+        except Exception as exc:
+            logger.exception("Chatwoot media sync failed unexpectedly: %s", exc)
 
     async def sync_outgoing_whatsapp_message(
         self,
@@ -263,6 +435,8 @@ class ChatwootService:
         conversation_id = _coerce_int(payload.get("conversation_id")) or _coerce_int(
             conversation.get("id")
         )
+        if event in ("conversation_status_changed", "conversation_updated"):
+            conversation_id = conversation_id or _coerce_int(payload.get("id"))
 
         logger.info(
             "Chatwoot webhook received: event=%s message_id=%s conversation_id=%s",
@@ -271,6 +445,8 @@ class ChatwootService:
             conversation_id,
         )
 
+        if event in ("conversation_status_changed", "conversation_updated"):
+            return self._process_conversation_state_event(payload, conversation_id)
         if event != "message_created":
             return "event"
         if message_id and self.store.is_processed_message(message_id):
@@ -344,15 +520,30 @@ class ChatwootService:
         if message_id:
             self.store.mark_processed_message(message_id)
         if conversation_id:
-            self.store.upsert_mapping(
-                ChatwootMapping(
-                    whatsapp_chat_id=chat_id,
-                    phone=phone or _normalize_phone(chat_id),
-                    contact_name=contact_name,
-                    conversation_id=conversation_id,
-                    identifier=_preferred_contact_identifier(chat_id, phone),
-                )
+            existing = self.store.get_by_chat_id(chat_id) or self.store.get_by_conversation_id(
+                conversation_id
             )
+            mapping = existing or ChatwootMapping(whatsapp_chat_id=chat_id)
+            mapping.phone = phone or mapping.phone or _normalize_phone(chat_id)
+            mapping.contact_name = contact_name or mapping.contact_name
+            mapping.conversation_id = conversation_id
+            mapping.identifier = mapping.identifier or _preferred_contact_identifier(chat_id, phone)
+            mapping.handoff_state = "human"
+            mapping.conversation_status = self.config.human_handoff_status or "open"
+            mapping.last_handoff_at = int(time.time())
+            self.store.upsert_mapping(mapping)
+            try:
+                await self.client.update_conversation_status(
+                    conversation_id=int(conversation_id),
+                    status=self.config.human_handoff_status or "open",
+                )
+            except ChatwootApiError as exc:
+                logger.warning(
+                    "Chatwoot human reply status update failed: conversation_id=%s status=%s response=%s",
+                    conversation_id,
+                    exc.status_code,
+                    exc.response_text,
+                )
 
     async def process_message_created_event(
         self,
@@ -381,6 +572,8 @@ class ChatwootService:
     ) -> Optional[ChatwootMapping]:
         identifier = _preferred_contact_identifier(chat_id, phone)
         existing = self.store.get_by_chat_id(chat_id)
+        if existing and _normalize_chatwoot_status(existing.conversation_status) == "resolved":
+            existing.conversation_id = None
         if existing and existing.contact_source_id and existing.conversation_id:
             if (
                 (contact_name and contact_name != existing.contact_name)
@@ -457,11 +650,13 @@ class ChatwootService:
             return None
 
         conversation_id = existing.conversation_id if existing else None
+        conversation_status = existing.conversation_status if existing else ""
         if not conversation_id:
             conversations = await self.client.list_contact_conversations(int(contact_id))
             conversation = self._pick_conversation(conversations)
             if conversation:
                 conversation_id = _coerce_int(conversation.get("id"))
+                conversation_status = _normalize_chatwoot_status(conversation.get("status"))
 
         if not conversation_id:
             conversation = await self.client.create_conversation(
@@ -469,6 +664,13 @@ class ChatwootService:
                 contact_source_id=contact_source_id,
             )
             conversation_id = _coerce_int(conversation.get("id"))
+            conversation_status = (
+                _normalize_chatwoot_status(conversation.get("status"))
+                or self.config.ai_conversation_status
+                or "pending"
+            )
+
+        handoff_state = "human" if conversation_status in ("open", "snoozed") else "ai"
 
         return ChatwootMapping(
             whatsapp_chat_id=chat_id,
@@ -478,6 +680,13 @@ class ChatwootService:
             contact_source_id=contact_source_id,
             conversation_id=conversation_id,
             identifier=identifier,
+            handoff_state=handoff_state,
+            conversation_status=conversation_status,
+            last_handoff_at=(
+                int(time.time())
+                if handoff_state == "human"
+                else (existing.last_handoff_at if existing else 0)
+            ),
         )
 
     async def _ensure_public_mapping(
@@ -503,12 +712,14 @@ class ChatwootService:
             contact_source_id = self._extract_contact_source_id(contact) or identifier
 
         conversation_id = existing.conversation_id if existing else None
+        conversation_status = existing.conversation_status if existing else ""
         if not conversation_id:
             conversation = await self.client.create_conversation(
                 contact_id=contact_id,
                 contact_source_id=contact_source_id,
             )
             conversation_id = _coerce_int(conversation.get("id"))
+            conversation_status = _normalize_chatwoot_status(conversation.get("status")) or "open"
 
         return ChatwootMapping(
             whatsapp_chat_id=chat_id,
@@ -518,6 +729,9 @@ class ChatwootService:
             contact_source_id=contact_source_id,
             conversation_id=conversation_id,
             identifier=identifier,
+            handoff_state="ai",
+            conversation_status=conversation_status,
+            last_handoff_at=existing.last_handoff_at if existing else 0,
         )
 
     def _pick_contact(
@@ -548,24 +762,30 @@ class ChatwootService:
 
     def _pick_conversation(self, conversations: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
         target_inbox_id = _coerce_int(self.config.inbox_id)
-        preferred = []
-        same_inbox = []
+        pending = []
+        human = []
+        unknown = []
         fallback = []
         for conversation in conversations:
             if not isinstance(conversation, dict):
                 continue
             fallback.append(conversation)
             inbox_id = _coerce_int(conversation.get("inbox_id"))
-            status = str(conversation.get("status") or "").strip().lower()
+            status = _normalize_chatwoot_status(conversation.get("status"))
             if target_inbox_id and inbox_id != target_inbox_id:
                 continue
-            same_inbox.append(conversation)
-            if status in ("open", "pending", ""):
-                preferred.append(conversation)
-        if preferred:
-            return preferred[0]
-        if same_inbox:
-            return same_inbox[0]
+            if status == "pending":
+                pending.append(conversation)
+            elif status in ("open", "snoozed"):
+                human.append(conversation)
+            elif not status:
+                unknown.append(conversation)
+        if pending:
+            return pending[0]
+        if human:
+            return human[0]
+        if unknown:
+            return unknown[0]
         if target_inbox_id:
             return None
         return fallback[0] if fallback else None
@@ -613,6 +833,39 @@ class ChatwootService:
             if target_inbox_id and inbox_id == target_inbox_id:
                 return source_id
         return fallback
+
+    def _process_conversation_state_event(
+        self,
+        payload: dict[str, Any],
+        conversation_id: Optional[int],
+    ) -> str:
+        if not conversation_id:
+            return "conversation_missing_id"
+        status = _extract_status_from_payload(payload)
+        if not status:
+            return "conversation_status_missing"
+
+        if status == "pending":
+            self.store.update_handoff_state(
+                int(conversation_id),
+                handoff_state="ai",
+                conversation_status=status,
+            )
+            return "conversation_pending_ai"
+        if status == "resolved":
+            self.store.release_conversation(
+                int(conversation_id),
+                conversation_status=status,
+            )
+            return "conversation_resolved_ai"
+
+        handoff_state = "human" if status in ("open", "snoozed") else "ai"
+        self.store.update_handoff_state(
+            int(conversation_id),
+            handoff_state=handoff_state,
+            conversation_status=status,
+        )
+        return f"conversation_{status}_{handoff_state}"
 
     def _is_human_agent_message(self, payload: dict[str, Any]) -> bool:
         raw_message_type = payload.get("message_type")
@@ -706,6 +959,14 @@ def get_chatwoot_service() -> ChatwootService:
                 webhook_secret=os.getenv("CHATWOOT_WEBHOOK_SECRET", "").strip(),
                 state_db_path=os.getenv("CHATWOOT_STATE_DB", "chatwoot_state.db").strip()
                 or "chatwoot_state.db",
+                ai_conversation_status=_normalize_chatwoot_status(
+                    os.getenv("CHATWOOT_AI_STATUS", "pending")
+                )
+                or "pending",
+                human_handoff_status=_normalize_chatwoot_status(
+                    os.getenv("CHATWOOT_HUMAN_STATUS", "open")
+                )
+                or "open",
             )
         )
     return _SERVICE
@@ -724,6 +985,48 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_chatwoot_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    if status in ("open", "resolved", "pending", "snoozed"):
+        return status
+    return ""
+
+
+def _extract_status_from_payload(payload: dict[str, Any]) -> str:
+    status = _normalize_chatwoot_status(payload.get("status"))
+    if status:
+        return status
+    conversation = payload.get("conversation") or {}
+    if isinstance(conversation, dict):
+        status = _normalize_chatwoot_status(conversation.get("status"))
+        if status:
+            return status
+
+    changed_attributes = payload.get("changed_attributes") or payload.get("changedAttributes") or []
+    if isinstance(changed_attributes, list):
+        for item in changed_attributes:
+            if not isinstance(item, dict):
+                continue
+            raw = item.get("status")
+            if isinstance(raw, dict):
+                status = _normalize_chatwoot_status(
+                    raw.get("current_value") or raw.get("currentValue")
+                )
+            else:
+                status = _normalize_chatwoot_status(raw)
+            if status:
+                return status
+    return ""
+
+
+def _normalize_handoff_text(content: str) -> str:
+    text = str(content or "").strip().lower()
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return " ".join(text.split())
 
 
 def _normalize_phone(value: str) -> str:

@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import mimetypes
 import os
 import re
 import subprocess
@@ -158,12 +159,164 @@ def extract_mimetype(payload: Dict[str, Any]) -> str:
     return mimetype
 
 
+def infer_chatwoot_file_type(payload: Dict[str, Any]) -> str:
+    mimetype = extract_mimetype(payload)
+    if mimetype.startswith("image/"):
+        return "image"
+    if mimetype.startswith("audio/"):
+        return "audio"
+    if mimetype.startswith("video/"):
+        return "video"
+    msg_type = (payload.get("type") or payload.get("messageType") or "").strip().lower()
+    if msg_type in ("image", "audio", "video"):
+        return msg_type
+    media = payload.get("media")
+    if isinstance(media, dict):
+        media_type = (media.get("type") or "").strip().lower()
+        if media_type in ("image", "audio", "video"):
+            return media_type
+    return "file"
+
+
+def extract_media_filename(
+    payload: Dict[str, Any],
+    media_url: Optional[str] = None,
+    *,
+    default_prefix: str = "attachment",
+) -> str:
+    for container in (
+        payload,
+        payload.get("media") if isinstance(payload.get("media"), dict) else None,
+        payload.get("_data") if isinstance(payload.get("_data"), dict) else None,
+        payload.get("data") if isinstance(payload.get("data"), dict) else None,
+    ):
+        if not isinstance(container, dict):
+            continue
+        for key in ("filename", "fileName", "name", "file_name"):
+            value = str(container.get(key) or "").strip()
+            if value:
+                return _safe_filename(value)
+
+    if media_url:
+        parsed_name = os.path.basename(urlparse(media_url).path)
+        if parsed_name:
+            return _safe_filename(parsed_name)
+
+    mimetype = extract_mimetype(payload)
+    extension = mimetypes.guess_extension(mimetype or "") or ""
+    if mimetype == "audio/ogg":
+        extension = ".ogg"
+    if not extension and is_audio_payload(payload):
+        return guess_audio_filename(payload, media_url)
+    return f"{default_prefix}{extension or '.bin'}"
+
+
+def _safe_filename(value: str) -> str:
+    filename = os.path.basename(str(value or "").strip())
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._")
+    return filename or "attachment"
+
+
+def _payload_dicts(payload: Dict[str, Any]) -> list[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    items: list[Dict[str, Any]] = [payload]
+    for key in ("message", "msg", "_data", "data", "key"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            items.append(value)
+    return items
+
+
+def _looks_like_whatsapp_phone_id(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text.endswith("@c.us") or text.endswith("@s.whatsapp.net")
+
+
+def extract_chat_id(payload: Dict[str, Any]) -> Optional[str]:
+    first_candidate = ""
+    for item in _payload_dicts(payload):
+        for key in ("from", "chatId", "chat_id", "remoteJid", "remote_jid"):
+            value = str(item.get(key) or "").strip()
+            if not value:
+                continue
+            if _looks_like_whatsapp_phone_id(value):
+                return value
+            if not first_candidate:
+                first_candidate = value
+        key_obj = item.get("key")
+        if isinstance(key_obj, dict):
+            for key in ("remoteJid", "remote_jid", "from"):
+                value = str(key_obj.get(key) or "").strip()
+                if not value:
+                    continue
+                if _looks_like_whatsapp_phone_id(value):
+                    return value
+                if not first_candidate:
+                    first_candidate = value
+        id_obj = item.get("id")
+        if isinstance(id_obj, dict):
+            for key in ("remote", "remoteJid", "remote_jid", "participant"):
+                value = str(id_obj.get(key) or "").strip()
+                if not value:
+                    continue
+                if _looks_like_whatsapp_phone_id(value):
+                    return value
+                if not first_candidate:
+                    first_candidate = value
+        if not first_candidate:
+            value = str(item.get("to") or "").strip()
+            if value:
+                first_candidate = value
+    return first_candidate or None
+
+
 def normalize_phone(chat_id: str) -> str:
     if not chat_id:
         return ""
-    base = chat_id.split("@", 1)[0]
+    text = str(chat_id or "").strip()
+    if text.endswith("@lid"):
+        return ""
+    base = text.split("@", 1)[0]
     digits = "".join(ch for ch in base if ch.isdigit())
     return digits or base
+
+
+def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = "") -> str:
+    for item in _payload_dicts(payload):
+        for key in (
+            "from",
+            "chatId",
+            "chat_id",
+            "author",
+            "participant",
+            "remoteJid",
+            "remote_jid",
+        ):
+            value = item.get(key)
+            if _looks_like_whatsapp_phone_id(value):
+                return normalize_phone(str(value))
+
+        key_obj = item.get("key")
+        if isinstance(key_obj, dict):
+            for key in ("remoteJid", "remote_jid", "participant", "from"):
+                value = key_obj.get(key)
+                if _looks_like_whatsapp_phone_id(value):
+                    return normalize_phone(str(value))
+
+        for nested_key in ("sender", "contact"):
+            nested = item.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            for key in ("phone", "phoneNumber", "phone_number", "id", "jid"):
+                value = nested.get(key)
+                if _looks_like_whatsapp_phone_id(value):
+                    return normalize_phone(str(value))
+                digits = normalize_phone(str(value or ""))
+                if len(digits) >= 8:
+                    return digits
+
+    return normalize_phone(fallback_chat_id)
 
 
 def guess_audio_filename(payload: Dict[str, Any], media_url: Optional[str] = None) -> str:
@@ -640,7 +793,7 @@ def extract_timestamp(payload: Dict[str, Any]) -> Optional[str]:
 def message_fingerprint(payload: Dict[str, Any]) -> Optional[str]:
     if not payload:
         return None
-    chat_id = payload.get("from") or payload.get("chatId") or payload.get("to")
+    chat_id = extract_chat_id(payload)
     msg_id = extract_message_id(payload)
     if chat_id and msg_id:
         return f"{chat_id}:{msg_id}"

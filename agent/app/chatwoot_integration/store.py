@@ -18,6 +18,9 @@ class ChatwootMapping:
     contact_source_id: str = ""
     conversation_id: Optional[int] = None
     identifier: str = ""
+    handoff_state: str = "ai"
+    conversation_status: str = ""
+    last_handoff_at: int = 0
     updated_at: int = 0
 
 
@@ -48,10 +51,16 @@ class ChatwootStore:
                     contact_source_id TEXT NOT NULL DEFAULT '',
                     conversation_id INTEGER UNIQUE,
                     identifier TEXT NOT NULL DEFAULT '',
+                    handoff_state TEXT NOT NULL DEFAULT 'ai',
+                    conversation_status TEXT NOT NULL DEFAULT '',
+                    last_handoff_at INTEGER NOT NULL DEFAULT 0,
                     updated_at INTEGER NOT NULL
                 )
                 """
             )
+            self._ensure_column(conn, "chatwoot_mappings", "handoff_state", "TEXT NOT NULL DEFAULT 'ai'")
+            self._ensure_column(conn, "chatwoot_mappings", "conversation_status", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "chatwoot_mappings", "last_handoff_at", "INTEGER NOT NULL DEFAULT 0")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chatwoot_processed_messages (
@@ -87,6 +96,9 @@ class ChatwootStore:
                     contact_source_id,
                     conversation_id,
                     identifier,
+                    handoff_state,
+                    conversation_status,
+                    last_handoff_at,
                     updated_at
                 FROM chatwoot_mappings
                 WHERE whatsapp_chat_id = ?
@@ -109,6 +121,9 @@ class ChatwootStore:
                     contact_source_id,
                     conversation_id,
                     identifier,
+                    handoff_state,
+                    conversation_status,
+                    last_handoff_at,
                     updated_at
                 FROM chatwoot_mappings
                 WHERE conversation_id = ?
@@ -133,8 +148,11 @@ class ChatwootStore:
                     contact_source_id,
                     conversation_id,
                     identifier,
+                    handoff_state,
+                    conversation_status,
+                    last_handoff_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(whatsapp_chat_id) DO UPDATE SET
                     phone = excluded.phone,
                     contact_name = excluded.contact_name,
@@ -142,6 +160,9 @@ class ChatwootStore:
                     contact_source_id = excluded.contact_source_id,
                     conversation_id = excluded.conversation_id,
                     identifier = excluded.identifier,
+                    handoff_state = excluded.handoff_state,
+                    conversation_status = excluded.conversation_status,
+                    last_handoff_at = excluded.last_handoff_at,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -152,10 +173,62 @@ class ChatwootStore:
                     mapping.contact_source_id or "",
                     mapping.conversation_id,
                     mapping.identifier or "",
+                    _normalize_handoff_state(mapping.handoff_state),
+                    mapping.conversation_status or "",
+                    int(mapping.last_handoff_at or 0),
                     now,
                 ),
             )
         return mapping
+
+    def update_handoff_state(
+        self,
+        conversation_id: int,
+        *,
+        handoff_state: str,
+        conversation_status: str = "",
+    ) -> None:
+        if not conversation_id:
+            return
+        state = _normalize_handoff_state(handoff_state)
+        now = int(time.time())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE chatwoot_mappings
+                SET
+                    handoff_state = ?,
+                    conversation_status = ?,
+                    last_handoff_at = ?,
+                    updated_at = ?
+                WHERE conversation_id = ?
+                """,
+                (state, conversation_status or "", now, now, conversation_id),
+            )
+
+    def release_conversation(
+        self,
+        conversation_id: int,
+        *,
+        conversation_status: str = "resolved",
+    ) -> None:
+        if not conversation_id:
+            return
+        now = int(time.time())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE chatwoot_mappings
+                SET
+                    conversation_id = NULL,
+                    handoff_state = 'ai',
+                    conversation_status = ?,
+                    last_handoff_at = ?,
+                    updated_at = ?
+                WHERE conversation_id = ?
+                """,
+                (conversation_status or "resolved", now, now, conversation_id),
+            )
 
     def clear_mapping(self, chat_id: str) -> None:
         if not chat_id:
@@ -200,6 +273,19 @@ class ChatwootStore:
             )
 
     @staticmethod
+    def _ensure_column(
+        conn: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        definition: str,
+    ) -> None:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        if column_name in existing:
+            return
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+    @staticmethod
     def _row_to_mapping(row: Optional[sqlite3.Row]) -> Optional[ChatwootMapping]:
         if row is None:
             return None
@@ -211,5 +297,15 @@ class ChatwootStore:
             contact_source_id=str(row["contact_source_id"] or ""),
             conversation_id=row["conversation_id"],
             identifier=str(row["identifier"] or ""),
+            handoff_state=_normalize_handoff_state(str(row["handoff_state"] or "ai")),
+            conversation_status=str(row["conversation_status"] or ""),
+            last_handoff_at=int(row["last_handoff_at"] or 0),
             updated_at=int(row["updated_at"] or 0),
         )
+
+
+def _normalize_handoff_state(value: str) -> str:
+    state = str(value or "").strip().lower()
+    if state == "human":
+        return "human"
+    return "ai"

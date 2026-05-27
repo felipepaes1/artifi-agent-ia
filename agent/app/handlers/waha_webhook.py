@@ -54,17 +54,22 @@ from ..core.state import (
 )
 from ..formatters.sanitizer import sanitize_plain_text, truncate
 from ..integrations.waha import (
+    download_media,
+    extract_chat_id,
     extract_event_id,
+    extract_media_filename,
     extract_media_url,
     extract_message_id,
+    extract_mimetype,
+    extract_phone_from_payload,
     extract_timestamp,
     get_contact_name,
+    infer_chatwoot_file_type,
     is_audio_payload,
     is_from_me_payload,
     is_non_text_media,
     message_fingerprint,
     name_from_payload,
-    normalize_phone,
     send_profile_poll,
     transcribe_audio,
 )
@@ -138,6 +143,55 @@ async def send_reply(
         send_text_parts_fn=send_text_parts,
         get_audio_bucket_for_profile=get_audio_bucket_for_profile,
         is_chat_turn_current=is_chat_turn_current,
+    )
+
+
+def media_caption_from_payload(payload: Dict[str, Any]) -> str:
+    for value in (
+        payload.get("caption"),
+        payload.get("body"),
+        payload.get("text"),
+        (payload.get("media") or {}).get("caption") if isinstance(payload.get("media"), dict) else "",
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def build_chatwoot_media_content(payload: Dict[str, Any], *, transcription: str = "") -> str:
+    if is_audio_payload(payload):
+        if transcription:
+            return f"[Audio recebido]\nTranscricao: {transcription}"
+        return "[Audio recebido]"
+    caption = media_caption_from_payload(payload)
+    if caption:
+        return f"[Arquivo recebido]\n{caption}"
+    return "[Arquivo recebido]"
+
+
+async def sync_chatwoot_media_message(
+    *,
+    chat_id: str,
+    phone: str,
+    payload: Dict[str, Any],
+    content: str,
+    message_id: str,
+) -> None:
+    media_url = extract_media_url(payload)
+    file_bytes = b""
+    if media_url:
+        file_bytes = await download_media(media_url) or b""
+    await get_chatwoot_service().sync_incoming_whatsapp_media(
+        chat_id=str(chat_id),
+        phone=phone,
+        contact_name=name_from_payload(payload) or "",
+        content=content,
+        file_bytes=file_bytes,
+        filename=extract_media_filename(payload, media_url),
+        content_type=extract_mimetype(payload) or "application/octet-stream",
+        file_type=infer_chatwoot_file_type(payload),
+        message_id=message_id,
     )
 
 
@@ -394,7 +448,7 @@ def build_waha_router() -> APIRouter:
         event_id = extract_event_id(data, payload)
         msg_type = (payload.get("type") or payload.get("messageType") or "").lower()
         message_id = extract_message_id(payload)
-        chat_id = payload.get("from") or payload.get("chatId") or payload.get("to")
+        chat_id = extract_chat_id(payload)
         from_me = is_from_me_payload(payload)
         raw_body = (payload.get("body") or payload.get("text") or "").strip()
         fingerprint = message_fingerprint(payload)
@@ -506,7 +560,19 @@ def build_waha_router() -> APIRouter:
         if (not ALLOW_GROUPS) and str(chat_id).endswith("@g.us"):
             return {"ok": True, "ignored": "group"}
 
+        chatwoot_service = get_chatwoot_service()
+        chatwoot_message_id = message_id or fingerprint or ""
+        whatsapp_phone = extract_phone_from_payload(payload, str(chat_id))
+
         if is_non_text_media(payload):
+            media_content = build_chatwoot_media_content(payload)
+            await sync_chatwoot_media_message(
+                chat_id=str(chat_id),
+                phone=whatsapp_phone,
+                payload=payload,
+                content=media_content,
+                message_id=chatwoot_message_id,
+            )
             active_turn = next_chat_turn(str(chat_id))
             pending_booking = consume_pending_signal_booking(str(chat_id))
             if pending_booking:
@@ -530,7 +596,22 @@ def build_waha_router() -> APIRouter:
                     profile_id=pending_booking.get("profile_id"),
                 )
                 return {"ok": True, "signal_confirmed": True}
-            reply = "Consigo acessar apenas mensagens de texto e audio. Pode enviar em texto ou audio, por favor?"
+            if chatwoot_service.is_human_handoff_active(str(chat_id)):
+                return {"ok": True, "handoff": "human_media"}
+            handed = await chatwoot_service.handoff_to_human(
+                chat_id=str(chat_id),
+                phone=whatsapp_phone,
+                contact_name=name_from_payload(payload) or "",
+                reason=media_content,
+            )
+            if handed:
+                reply = (
+                    "Recebi seu arquivo e vou encaminhar para a equipe analisar. "
+                    "A resposta continua por aqui."
+                )
+                await send_reply(chat_id, reply, active_turn=active_turn)
+                return {"ok": True, "handoff": "media_to_human"}
+            reply = "Recebi seu arquivo, mas ainda nao consigo analisar esse formato por aqui."
             await send_text_parts(chat_id, reply, active_turn=active_turn)
             return {"ok": True, "ignored": "non_text_media"}
 
@@ -540,12 +621,41 @@ def build_waha_router() -> APIRouter:
             media_url = extract_media_url(payload)
             if not media_url:
                 active_turn = next_chat_turn(str(chat_id))
+                await chatwoot_service.sync_incoming_whatsapp_message(
+                    chat_id=str(chat_id),
+                    phone=whatsapp_phone,
+                    contact_name=name_from_payload(payload) or "",
+                    content="[Audio recebido sem URL de midia]",
+                    message_id=chatwoot_message_id,
+                )
                 reply = "Consigo ouvir audios, mas nao consegui acessar esse. Pode reenviar, por favor?"
                 await send_text_parts(chat_id, reply, active_turn=active_turn)
                 return {"ok": True, "ignored": "missing_audio_url"}
             transcription = await transcribe_audio(media_url, payload)
+            await sync_chatwoot_media_message(
+                chat_id=str(chat_id),
+                phone=whatsapp_phone,
+                payload=payload,
+                content=build_chatwoot_media_content(payload, transcription=transcription or ""),
+                message_id=chatwoot_message_id,
+            )
+            if chatwoot_service.is_human_handoff_active(str(chat_id)):
+                return {"ok": True, "handoff": "human_audio"}
             if not transcription:
                 active_turn = next_chat_turn(str(chat_id))
+                handed = await chatwoot_service.handoff_to_human(
+                    chat_id=str(chat_id),
+                    phone=whatsapp_phone,
+                    contact_name=name_from_payload(payload) or "",
+                    reason="[Audio recebido sem transcricao]",
+                )
+                if handed:
+                    reply = (
+                        "Recebi seu audio, mas nao consegui transcrever com seguranca. "
+                        "Vou encaminhar para a equipe ouvir e te responder por aqui."
+                    )
+                    await send_reply(chat_id, reply, active_turn=active_turn)
+                    return {"ok": True, "handoff": "audio_transcription_failed"}
                 reply = "Nao consegui transcrever o audio. Pode reenviar ou mandar em texto?"
                 await send_text_parts(chat_id, reply, active_turn=active_turn)
                 return {"ok": True, "ignored": "transcription_failed"}
@@ -553,6 +663,31 @@ def build_waha_router() -> APIRouter:
 
         if not body:
             return {"ok": True, "ignored": "empty"}
+
+        if not is_audio:
+            await chatwoot_service.sync_incoming_whatsapp_message(
+                chat_id=str(chat_id),
+                phone=whatsapp_phone,
+                contact_name=name_from_payload(payload) or "",
+                content=body,
+                message_id=chatwoot_message_id,
+            )
+
+        if chatwoot_service.is_human_handoff_active(str(chat_id)):
+            return {"ok": True, "handoff": "human_text"}
+
+        if chatwoot_service.should_request_human_handoff(body):
+            handed = await chatwoot_service.handoff_to_human(
+                chat_id=str(chat_id),
+                phone=whatsapp_phone,
+                contact_name=name_from_payload(payload) or "",
+                reason=body,
+            )
+            if handed:
+                active_turn = next_chat_turn(str(chat_id))
+                reply = "Claro. Vou chamar alguem da equipe para continuar seu atendimento por aqui."
+                await send_reply(chat_id, reply, active_turn=active_turn)
+                return {"ok": True, "handoff": "requested_by_patient"}
 
         pre_coalesce_profile_id: Optional[str] = None
         if PROFILE_ROUTING_ENABLED:
@@ -568,13 +703,6 @@ def build_waha_router() -> APIRouter:
         if coalesced is None:
             return {"ok": True, "queued": True}
         body, is_audio = coalesced
-        await get_chatwoot_service().sync_incoming_whatsapp_message(
-            chat_id=str(chat_id),
-            phone=normalize_phone(str(chat_id)),
-            contact_name=name_from_payload(payload) or "",
-            content=body,
-            message_id=message_id or fingerprint or "",
-        )
         active_turn = next_chat_turn(str(chat_id))
         log_webhook_debug(
             "coalesced",
@@ -814,7 +942,7 @@ def build_waha_router() -> APIRouter:
                     schedule_choice,
                     profile_id=profile_id,
                     chat_id=str(chat_id),
-                    phone=normalize_phone(str(chat_id)),
+                    phone=whatsapp_phone,
                     force_ariane=is_ariane_flow,
                 )
                 LAST_SCHEDULE_OPTIONS.pop(str(chat_id), None)
