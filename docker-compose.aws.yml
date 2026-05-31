@@ -40,7 +40,9 @@ services:
     volumes:
       - ./volumes/chatwoot_postgres:/var/lib/postgresql/data
     networks:
-      - chatwoot_backend
+      chatwoot_backend:
+        aliases:
+          - chatwoot-postgres
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
@@ -58,7 +60,9 @@ services:
     volumes:
       - ./volumes/chatwoot_redis:/data
     networks:
-      - chatwoot_backend
+      chatwoot_backend:
+        aliases:
+          - chatwoot-redis
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
       interval: 10s
@@ -87,13 +91,13 @@ services:
       LOG_LEVEL: ${CHATWOOT_LOG_LEVEL:-info}
       WEB_CONCURRENCY: ${CHATWOOT_WEB_CONCURRENCY:-1}
       RAILS_MAX_THREADS: ${CHATWOOT_RAILS_MAX_THREADS:-3}
-      POSTGRES_HOST: chatwoot_postgres
+      POSTGRES_HOST: chatwoot-postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@chatwoot_postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot_redis:6379
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@chatwoot-postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot-redis:6379
       MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-no-reply@example.com}
     volumes:
       - ./volumes/chatwoot_storage:/app/storage
@@ -132,13 +136,13 @@ services:
       RAILS_LOG_TO_STDOUT: "true"
       LOG_LEVEL: ${CHATWOOT_LOG_LEVEL:-info}
       SIDEKIQ_CONCURRENCY: ${CHATWOOT_SIDEKIQ_CONCURRENCY:-2}
-      POSTGRES_HOST: chatwoot_postgres
+      POSTGRES_HOST: chatwoot-postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@chatwoot_postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot_redis:6379
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@chatwoot-postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot-redis:6379
       MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-no-reply@example.com}
     volumes:
       - ./volumes/chatwoot_storage:/app/storage
