@@ -1,0 +1,291 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  traefik:
+    image: traefik:v3.6.7
+    container_name: artifi_traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./volumes/traefik:/letsencrypt
+    networks:
+      - proxy
+    logging: *default-logging
+    restart: unless-stopped
+
+  chatwoot_postgres:
+    image: pgvector/pgvector:pg16
+    container_name: artifi_chatwoot_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./volumes/chatwoot_postgres:/var/lib/postgresql/data
+    networks:
+      - chatwoot_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  chatwoot_redis:
+    image: redis:7-alpine
+    container_name: artifi_chatwoot_redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["sh", "-c", "redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - ./volumes/chatwoot_redis:/data
+    networks:
+      - chatwoot_backend
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  chatwoot:
+    image: ${CHATWOOT_IMAGE:-chatwoot/chatwoot:latest}
+    container_name: artifi_chatwoot
+    depends_on:
+      chatwoot_postgres:
+        condition: service_healthy
+      chatwoot_redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      RAILS_ENV: production
+      INSTALLATION_ENV: docker
+      FRONTEND_URL: ${FRONTEND_URL}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ENABLE_ACCOUNT_SIGNUP: ${ENABLE_ACCOUNT_SIGNUP:-false}
+      ACTIVE_STORAGE_SERVICE: local
+      RAILS_LOG_TO_STDOUT: "true"
+      LOG_LEVEL: ${CHATWOOT_LOG_LEVEL:-info}
+      WEB_CONCURRENCY: ${CHATWOOT_WEB_CONCURRENCY:-1}
+      RAILS_MAX_THREADS: ${CHATWOOT_RAILS_MAX_THREADS:-3}
+      POSTGRES_HOST: chatwoot_postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@chatwoot_postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot_redis:6379
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-no-reply@example.com}
+    volumes:
+      - ./volumes/chatwoot_storage:/app/storage
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    networks:
+      - proxy
+      - app_backend
+      - chatwoot_backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=artifi_proxy
+      - traefik.http.routers.chatwoot.rule=Host(`${CHATWOOT_HOST}`)
+      - traefik.http.routers.chatwoot.entrypoints=websecure
+      - traefik.http.routers.chatwoot.tls.certresolver=le
+      - traefik.http.services.chatwoot.loadbalancer.server.port=3000
+    mem_limit: ${CHATWOOT_MEM_LIMIT:-1200m}
+    logging: *default-logging
+    restart: unless-stopped
+
+  chatwoot_worker:
+    image: ${CHATWOOT_IMAGE:-chatwoot/chatwoot:latest}
+    container_name: artifi_chatwoot_worker
+    depends_on:
+      chatwoot_postgres:
+        condition: service_healthy
+      chatwoot_redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      RAILS_ENV: production
+      INSTALLATION_ENV: docker
+      FRONTEND_URL: ${FRONTEND_URL}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ACTIVE_STORAGE_SERVICE: local
+      RAILS_LOG_TO_STDOUT: "true"
+      LOG_LEVEL: ${CHATWOOT_LOG_LEVEL:-info}
+      SIDEKIQ_CONCURRENCY: ${CHATWOOT_SIDEKIQ_CONCURRENCY:-2}
+      POSTGRES_HOST: chatwoot_postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@chatwoot_postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot_redis:6379
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-no-reply@example.com}
+    volumes:
+      - ./volumes/chatwoot_storage:/app/storage
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    networks:
+      - chatwoot_backend
+    mem_limit: ${CHATWOOT_WORKER_MEM_LIMIT:-800m}
+    logging: *default-logging
+    restart: unless-stopped
+
+  waha:
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
+    container_name: artifi_waha
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      WAHA_API_KEY: ${WAHA_API_KEY_PLAIN}
+      WAHA_DASHBOARD_ENABLED: ${WAHA_DASHBOARD_ENABLED:-true}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WAHA_PUBLIC_URL: https://${WAHA_HOST}
+      WHATSAPP_HOOK_URL: http://agent:8000/webhook/waha
+      WHATSAPP_HOOK_EVENTS: ${WHATSAPP_HOOK_EVENTS:-message}
+      WAHA_LOG_LEVEL: ${WAHA_LOG_LEVEL:-info}
+      WAHA_HTTP_LOG_LEVEL: ${WAHA_HTTP_LOG_LEVEL:-warn}
+    volumes:
+      - ./volumes/waha_sessions:/app/.sessions
+    networks:
+      - proxy
+      - app_backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=artifi_proxy
+      - traefik.http.routers.waha.rule=Host(`${WAHA_HOST}`)
+      - traefik.http.routers.waha.entrypoints=websecure
+      - traefik.http.routers.waha.tls.certresolver=le
+      - traefik.http.services.waha.loadbalancer.server.port=3000
+    mem_limit: ${WAHA_MEM_LIMIT:-700m}
+    logging: *default-logging
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: artifi_agent
+    depends_on:
+      - chatwoot
+      - waha
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_MAX_TOKENS: ${OPENAI_MAX_TOKENS:-}
+      OPENAI_TRANSCRIBE_MODEL: ${OPENAI_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      OPENAI_TRANSCRIBE_LANGUAGE: ${OPENAI_TRANSCRIBE_LANGUAGE:-pt}
+      OPENAI_TTS_MODEL: ${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      OPENAI_TTS_VOICE: ${OPENAI_TTS_VOICE:-marin}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      GROQ_TEMPERATURE: ${GROQ_TEMPERATURE:-}
+      GROQ_MAX_TOKENS: ${GROQ_MAX_TOKENS:-}
+      SYSTEM_PROMPT: ${SYSTEM_PROMPT:-}
+      AGENT_PROMPT_PROFILE: ${AGENT_PROMPT_PROFILE:-}
+      AGENT_PROFILE_ROUTING: ${AGENT_PROFILE_ROUTING:-false}
+      AGENT_PROFILES_PATH: ${AGENT_PROFILES_PATH:-/app/app/profiles.mariano.json}
+      ALLOW_GROUPS: ${ALLOW_GROUPS:-false}
+      MAX_REPLY_CHARS: ${MAX_REPLY_CHARS:-1200}
+      MESSAGE_DELAY_MS: ${MESSAGE_DELAY_MS:-350}
+      FIRST_MESSAGE_DELAY_MS: ${FIRST_MESSAGE_DELAY_MS:-180}
+      SCHEDULE_DELAY_MS: ${SCHEDULE_DELAY_MS:-350}
+      USER_MESSAGE_COALESCE_MS: ${USER_MESSAGE_COALESCE_MS:-800}
+      USER_MESSAGE_COALESCE_MAX_MS: ${USER_MESSAGE_COALESCE_MAX_MS:-2500}
+      MESSAGE_SPLIT_TARGET_CHARS: ${MESSAGE_SPLIT_TARGET_CHARS:-420}
+      MESSAGE_SPLIT_MAX_CHARS: ${MESSAGE_SPLIT_MAX_CHARS:-720}
+      AGENT_PROFILE_DB: /data/profile_state.db
+      AGENT_SESSION_DB: /data/sessions.db
+      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-http://chatwoot:3000}
+      CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
+      CHATWOOT_API_ACCESS_TOKEN: ${CHATWOOT_API_ACCESS_TOKEN:-}
+      CHATWOOT_INBOX_ID: ${CHATWOOT_INBOX_ID:-}
+      CHATWOOT_INBOX_IDENTIFIER: ${CHATWOOT_INBOX_IDENTIFIER:-}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET:-}
+      CHATWOOT_STATE_DB: /data/chatwoot_state.db
+      CHATWOOT_AI_STATUS: ${CHATWOOT_AI_STATUS:-pending}
+      CHATWOOT_HUMAN_STATUS: ${CHATWOOT_HUMAN_STATUS:-open}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_TABLE: ${SUPABASE_TABLE:-conversations_agent_sessions}
+      SUPABASE_APP: ${SUPABASE_APP:-delivery}
+      SUPABASE_ENABLED: ${SUPABASE_ENABLED:-true}
+      SUPABASE_SESSION_LIMIT: ${SUPABASE_SESSION_LIMIT:-12}
+      CRIOLASER_AUDIO_BUCKET: ${CRIOLASER_AUDIO_BUCKET:-audios_criolaser}
+      SESSION_MAX_ITEMS: ${SESSION_MAX_ITEMS:-0}
+      WAHA_BASE_URL: http://waha:3000
+      WAHA_API_KEY_PLAIN: ${WAHA_API_KEY_PLAIN:-}
+      WAHA_SESSION: ${WAHA_SESSION:-default}
+      AGENT_VECTOR_STORE_ARIANE: ${AGENT_VECTOR_STORE_ARIANE:-}
+      AGENT_VECTOR_STORE_MARIANO: ${AGENT_VECTOR_STORE_MARIANO:-}
+      AGENT_VECTOR_STORE_MAIS_VISION: ${AGENT_VECTOR_STORE_MAIS_VISION:-}
+      AGENT_VECTOR_STORE_CRIOLASER: ${AGENT_VECTOR_STORE_CRIOLASER:-}
+      AGENT_VECTOR_STORE_BIOVITA: ${AGENT_VECTOR_STORE_BIOVITA:-}
+      AGENT_VECTOR_STORE_ODENA: ${AGENT_VECTOR_STORE_ODENA:-}
+    volumes:
+      - ./volumes/agent_state:/data
+    networks:
+      - proxy
+      - app_backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=artifi_proxy
+      - traefik.http.routers.agent.rule=Host(`${AGENT_HOST}`)
+      - traefik.http.routers.agent.entrypoints=websecure
+      - traefik.http.routers.agent.tls.certresolver=le
+      - traefik.http.services.agent.loadbalancer.server.port=8000
+    mem_limit: ${AGENT_MEM_LIMIT:-700m}
+    logging: *default-logging
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./whatsapp-agent-dashboard
+      dockerfile: Dockerfile
+    container_name: artifi_dashboard
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      DASHBOARD_DB_SCHEMA: ${DASHBOARD_DB_SCHEMA:-agent}
+      DASHBOARD_CACHE_TTL_MS: ${DASHBOARD_CACHE_TTL_MS:-60000}
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=artifi_proxy
+      - traefik.http.routers.dashboard.rule=Host(`${DASHBOARD_HOST}`)
+      - traefik.http.routers.dashboard.entrypoints=websecure
+      - traefik.http.routers.dashboard.tls.certresolver=le
+      - traefik.http.services.dashboard.loadbalancer.server.port=3000
+    mem_limit: ${DASHBOARD_MEM_LIMIT:-300m}
+    logging: *default-logging
+    restart: unless-stopped
+
+networks:
+  proxy:
+    name: artifi_proxy
+  app_backend:
+    internal: true
+  chatwoot_backend:
+    internal: true

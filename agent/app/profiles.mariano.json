@@ -1,0 +1,17 @@
+{
+  "pollName": "Perfil de atendimento",
+  "profiles": [
+    {
+      "id": "mariano",
+      "label": "Odontologia",
+      "instructions_path": "assistant_instructions.txt",
+      "response_style": "direct",
+      "temperature": 0.2,
+      "max_tokens": 220,
+      "max_reply_chars": 350,
+      "greeting_name": "Mariano Odontologia",
+      "greeting_message": "tudo bem? Sou a assistente da Mariano Odontologia 🦷\nComo posso te ajudar hoje?",
+      "flow_path": "flows/mariano.json"
+    }
+  ]
+}

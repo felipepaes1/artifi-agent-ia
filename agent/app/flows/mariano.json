@@ -1,0 +1,15 @@
+{
+  "flow_id": "mariano_triagem_v3",
+  "states": [
+    "discover_need",
+    "triage",
+    "handoff_to_scheduler"
+  ],
+  "schedule": {
+    "provider": "handoff",
+    "event_location": "Clínica Mariano Odontologia"
+  },
+  "booking": {
+    "requires_deposit": false
+  }
+}
