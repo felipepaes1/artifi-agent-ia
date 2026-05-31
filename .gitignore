@@ -45,6 +45,8 @@ volumes/
 storage/
 mcp_data/
 waha_data/
+scripts/
+docs/
 
 # Docker/runtime/certs
 volumes/
