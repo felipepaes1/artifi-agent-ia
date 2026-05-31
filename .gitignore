@@ -5,6 +5,7 @@
 !.env.example
 !.env.sample
 !.env.template
+.codex
 
 # Logs and build artifacts
 *.log
