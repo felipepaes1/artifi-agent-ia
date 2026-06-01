@@ -578,6 +578,8 @@ def build_waha_router() -> APIRouter:
                     },
                 )
                 return {"ok": True, "ignored": "outbound_echo_text"}
+            # Invalidate any AI response that was already coalescing or being generated.
+            next_chat_turn(str(chat_id))
             manual_content = raw_body or build_chatwoot_media_content(payload)
             await chatwoot_service.activate_human_handoff(
                 chat_id=str(chat_id),
@@ -743,6 +745,9 @@ def build_waha_router() -> APIRouter:
         if coalesced is None:
             return {"ok": True, "queued": True}
         body, is_audio = coalesced
+        if chatwoot_service.is_human_handoff_active(str(chat_id)):
+            logger.info("AI reply suppressed by Chatwoot handoff after coalesce: chat_id=%s", chat_id)
+            return {"ok": True, "handoff": "human_text_after_coalesce"}
         active_turn = next_chat_turn(str(chat_id))
         logger.info(
             "AI reply started: chat_id=%s phone=%s body_len=%s",

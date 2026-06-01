@@ -192,8 +192,6 @@ class ChatwootService:
         reason: str = "",
         create_note: bool = True,
     ) -> bool:
-        if not self.config.account_mode:
-            return False
         chat_id = str(chat_id or "").strip()
         if not chat_id:
             return False
@@ -203,22 +201,23 @@ class ChatwootService:
             phone=phone_digits,
             contact_name=contact_name,
         )
-        if not mapping or not mapping.conversation_id:
+        if not mapping:
             return False
 
         status = self.config.human_handoff_status or "open"
-        try:
-            await self.client.update_conversation_status(
-                conversation_id=int(mapping.conversation_id),
-                status=status,
-            )
-        except ChatwootApiError as exc:
-            logger.warning(
-                "Chatwoot human handoff status update failed: conversation_id=%s status=%s response=%s",
-                mapping.conversation_id,
-                exc.status_code,
-                exc.response_text,
-            )
+        if self.config.account_mode and mapping.conversation_id:
+            try:
+                await self.client.update_conversation_status(
+                    conversation_id=int(mapping.conversation_id),
+                    status=status,
+                )
+            except ChatwootApiError as exc:
+                logger.warning(
+                    "Chatwoot human handoff status update failed: conversation_id=%s status=%s response=%s",
+                    mapping.conversation_id,
+                    exc.status_code,
+                    exc.response_text,
+                )
 
         mapping.handoff_state = "human"
         mapping.conversation_status = status
@@ -226,7 +225,7 @@ class ChatwootService:
         self.store.upsert_mapping(mapping)
 
         compact_reason = " ".join(str(reason or "").split()).strip()
-        if create_note and compact_reason:
+        if create_note and compact_reason and self.config.account_mode and mapping.conversation_id:
             try:
                 await self.client.create_private_note(
                     conversation_id=int(mapping.conversation_id),
