@@ -30,6 +30,14 @@ import {
   type MsgRow,
   type TenantRow,
 } from "./queries";
+import {
+  isMockTenantSlug,
+  MOCK_TENANT,
+  mockConversations,
+  mockMessages,
+  mockOverview,
+  mockTimeseries,
+} from "./mock";
 
 const DAY_MS = 86_400_000;
 const BRT_OFFSET_MS = 3 * 3_600_000; // America/Sao_Paulo (UTC-3)
@@ -60,6 +68,13 @@ async function tenants(): Promise<TenantRow[]> {
 async function requireTenant(query: URLSearchParams): Promise<TenantRow> {
   const slug = (query.get("tenant") ?? "").trim();
   if (!slug) throw new Error("parâmetro 'tenant' é obrigatório");
+  if (isMockTenantSlug(slug)) {
+    return {
+      id: MOCK_TENANT.slug,
+      slug: MOCK_TENANT.slug,
+      label: MOCK_TENANT.label,
+    };
+  }
   const found = (await tenants()).find((t) => t.slug === slug);
   if (!found) throw new Error(`tenant não encontrado: ${slug}`);
   return found;
@@ -161,6 +176,7 @@ async function rangeMessages(
 async function overview(query: URLSearchParams): Promise<OverviewDTO> {
   const tenant = await requireTenant(query);
   const range = clampRange(query.get("range"));
+  if (isMockTenantSlug(tenant.slug)) return mockOverview(range);
   const now = Date.now();
   const { current, previous } = await rangeMessages(tenant.id, range, now);
   const c = summarize(current);
@@ -193,6 +209,7 @@ async function overview(query: URLSearchParams): Promise<OverviewDTO> {
 async function timeseries(query: URLSearchParams): Promise<TimeseriesDTO> {
   const tenant = await requireTenant(query);
   const range = clampRange(query.get("range"));
+  if (isMockTenantSlug(tenant.slug)) return mockTimeseries(range);
   const now = Date.now();
   const rows = await cached(`msg:${tenant.id}:${range}:cur`, CACHE_TTL_MS, () =>
     fetchMessages(
@@ -238,6 +255,7 @@ async function timeseries(query: URLSearchParams): Promise<TimeseriesDTO> {
 async function conversations(query: URLSearchParams): Promise<ConversationsDTO> {
   const tenant = await requireTenant(query);
   const limit = Math.min(Math.max(Number(query.get("limit")) || 80, 1), 200);
+  if (isMockTenantSlug(tenant.slug)) return mockConversations(limit);
   const rows = await cached(`conv:${tenant.id}:${limit}`, CACHE_TTL_MS, () =>
     recentConversations(tenant.id, limit),
   );
@@ -262,6 +280,7 @@ async function conversations(query: URLSearchParams): Promise<ConversationsDTO> 
 async function messages(query: URLSearchParams): Promise<MessagesDTO> {
   const id = (query.get("conversationId") ?? "").trim();
   if (!id) throw new Error("parâmetro 'conversationId' é obrigatório");
+  if (id.startsWith("mock-conv-")) return mockMessages(id);
   const rows = await cached(`msgs:${id}`, CACHE_TTL_MS, () =>
     conversationMessages(id),
   );
@@ -290,10 +309,16 @@ async function dispatch(
   try {
     switch (pathname) {
       case "/api/tenants": {
-        const items = (await tenants()).map((t) => ({
-          slug: t.slug,
-          label: t.label,
-        }));
+        const rows = await tenants().catch(() => []);
+        const items = [
+          MOCK_TENANT,
+          ...rows
+            .filter((t) => !isMockTenantSlug(t.slug))
+            .map((t) => ({
+              slug: t.slug,
+              label: t.label,
+            })),
+        ];
         return { status: 200, body: { items } satisfies TenantsDTO };
       }
       case "/api/overview":

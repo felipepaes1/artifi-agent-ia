@@ -263,7 +263,7 @@ export default function DashboardLayout({
               value={String(range)}
               onValueChange={(v) => setRange(Number(v))}
             >
-              <SelectTrigger className="hidden sm:flex w-36 h-9 bg-secondary/50 border-border/50 text-sm">
+              <SelectTrigger className="hidden sm:flex w-40 h-9 bg-secondary/50 border-border/50 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

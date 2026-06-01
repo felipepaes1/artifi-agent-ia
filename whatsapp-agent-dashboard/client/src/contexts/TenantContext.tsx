@@ -13,6 +13,7 @@ import {
   type ReactNode,
 } from "react";
 import type { TenantDTO } from "@shared/api-types";
+import { MOCK_TENANT_SLUG } from "@shared/const";
 import { api } from "@/lib/api";
 
 export const RANGE_OPTIONS = [7, 30, 90] as const;
@@ -31,11 +32,14 @@ const TenantContext = createContext<TenantContextValue | null>(null);
 
 const SLUG_KEY = "dashboard.tenant";
 const RANGE_KEY = "dashboard.range";
+const MOCK_DEFAULT_KEY = "dashboard.mockDefault.v1";
 
 export function TenantProvider({ children }: { children: ReactNode }) {
   const [tenants, setTenants] = useState<TenantDTO[]>([]);
-  const [slug, setSlugState] = useState<string>(
-    () => localStorage.getItem(SLUG_KEY) ?? "",
+  const [slug, setSlugState] = useState<string>(() =>
+    localStorage.getItem(MOCK_DEFAULT_KEY) === "1"
+      ? (localStorage.getItem(SLUG_KEY) ?? MOCK_TENANT_SLUG)
+      : MOCK_TENANT_SLUG
   );
   const [range, setRangeState] = useState<number>(() => {
     const stored = Number(localStorage.getItem(RANGE_KEY));
@@ -53,11 +57,23 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       .then((res) => {
         if (!alive) return;
         setTenants(res.items);
-        setSlugState((current) =>
-          current && res.items.some((t) => t.slug === current)
-            ? current
-            : (res.items[0]?.slug ?? ""),
-        );
+        setSlugState((current) => {
+          const shouldUseMockDefault =
+            localStorage.getItem(MOCK_DEFAULT_KEY) !== "1";
+          const fallback =
+            res.items.find((t) => t.slug === MOCK_TENANT_SLUG)?.slug ??
+            res.items[0]?.slug ??
+            "";
+          const next =
+            shouldUseMockDefault && fallback === MOCK_TENANT_SLUG
+              ? fallback
+              : current && res.items.some((t) => t.slug === current)
+                ? current
+                : fallback;
+          if (next) localStorage.setItem(SLUG_KEY, next);
+          localStorage.setItem(MOCK_DEFAULT_KEY, "1");
+          return next;
+        });
         setError(res.items.length ? null : "Nenhum tenant encontrado no banco.");
       })
       .catch((err: unknown) => {
