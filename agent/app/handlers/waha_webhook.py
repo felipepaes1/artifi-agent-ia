@@ -555,16 +555,32 @@ def build_waha_router() -> APIRouter:
 
         chatwoot_service = get_chatwoot_service()
         chatwoot_message_id = message_id or fingerprint or ""
-        outbound_text_echo = has_recent_key(
-            RECENT_OUTBOUND_TEXT_KEYS,
-            outbound_text_key(str(chat_id), raw_body),
-            OUTBOUND_ECHO_TTL_SECONDS,
-        )
+        original_chat_id = str(chat_id)
         whatsapp_phone = extract_phone_from_payload(payload, str(chat_id))
         if not whatsapp_phone and is_lid_or_technical_chat_id(str(chat_id)):
             whatsapp_phone = await get_contact_phone(str(chat_id))
             if not whatsapp_phone:
                 logger.warning("Could not resolve WhatsApp phone for LID chat_id=%s", chat_id)
+        if whatsapp_phone and is_lid_or_technical_chat_id(str(chat_id)):
+            resolved_chat_id = f"{whatsapp_phone}@c.us"
+            if resolved_chat_id != str(chat_id):
+                logger.info(
+                    "Resolved WAHA LID chat target: original_chat_id=%s resolved_chat_id=%s",
+                    chat_id,
+                    resolved_chat_id,
+                )
+                chat_id = resolved_chat_id
+        outbound_text_echo = has_recent_key(
+            RECENT_OUTBOUND_TEXT_KEYS,
+            outbound_text_key(str(chat_id), raw_body),
+            OUTBOUND_ECHO_TTL_SECONDS,
+        )
+        if not outbound_text_echo and original_chat_id != str(chat_id):
+            outbound_text_echo = has_recent_key(
+                RECENT_OUTBOUND_TEXT_KEYS,
+                outbound_text_key(original_chat_id, raw_body),
+                OUTBOUND_ECHO_TTL_SECONDS,
+            )
 
         if from_me:
             if outbound_text_echo:
@@ -580,6 +596,8 @@ def build_waha_router() -> APIRouter:
                 return {"ok": True, "ignored": "outbound_echo_text"}
             # Invalidate any AI response that was already coalescing or being generated.
             next_chat_turn(str(chat_id))
+            if original_chat_id != str(chat_id):
+                next_chat_turn(original_chat_id)
             manual_content = raw_body or build_chatwoot_media_content(payload)
             await chatwoot_service.activate_human_handoff(
                 chat_id=str(chat_id),
