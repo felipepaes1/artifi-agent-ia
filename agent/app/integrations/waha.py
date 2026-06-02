@@ -269,7 +269,40 @@ def _looks_like_technical_whatsapp_name(value: Any) -> bool:
     return text.startswith("whatsapp chat id") or text.startswith("whatsapp lid")
 
 
+def _extract_first_whatsapp_id(payload: Dict[str, Any], keys: tuple[str, ...]) -> str:
+    first_candidate = ""
+    for item in _payload_dicts(payload):
+        for key in keys:
+            value = str(item.get(key) or "").strip()
+            if not value:
+                continue
+            if _looks_like_whatsapp_phone_id(value):
+                return value
+            if not first_candidate:
+                first_candidate = value
+    return first_candidate
+
+
 def extract_chat_id(payload: Dict[str, Any]) -> Optional[str]:
+    if is_from_me_payload(payload):
+        # In outgoing WAHA webhooks, "from" can be the connected WhatsApp
+        # session. The conversation target is usually chatId/to/remoteJid.
+        outgoing_target = _extract_first_whatsapp_id(
+            payload,
+            (
+                "chatId",
+                "chat_id",
+                "to",
+                "jid",
+                "whatsappJid",
+                "whatsapp_jid",
+                "remoteJid",
+                "remote_jid",
+            ),
+        )
+        if outgoing_target:
+            return outgoing_target
+
     first_candidate = ""
     for item in _payload_dicts(payload):
         for key in (
@@ -340,6 +373,24 @@ def normalize_phone(chat_id: str) -> str:
 
 
 def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = "") -> str:
+    if is_from_me_payload(payload):
+        outgoing_target = _extract_first_whatsapp_id(
+            payload,
+            (
+                "chatId",
+                "chat_id",
+                "to",
+                "jid",
+                "whatsappJid",
+                "whatsapp_jid",
+                "remoteJid",
+                "remote_jid",
+            ),
+        )
+        digits = _extract_brazil_phone_digits(outgoing_target)
+        if digits:
+            return digits
+
     for item in _payload_dicts(payload):
         for key in (
             "from",
