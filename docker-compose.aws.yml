@@ -150,6 +150,7 @@ services:
     networks:
       - chatwoot_backend
       - app_backend
+      - proxy
     mem_limit: ${CHATWOOT_WORKER_MEM_LIMIT:-800m}
     logging: *default-logging
     restart: unless-stopped
