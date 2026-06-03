@@ -20,6 +20,51 @@ from .tts_audio_service import send_tts_audio_reply
 
 logger = logging.getLogger("agent")
 
+# WhatsApp aceita textos longos, mas mantemos uma margem de seguranca para nao
+# estourar limites de UI/cliente. Mensagens de atendente humano sao entregues
+# verbatim e so quebram se ultrapassarem este teto.
+_HUMAN_MESSAGE_MAX_CHARS = 4000
+
+
+def _chunk_human_message(text: str, *, limit: int = _HUMAN_MESSAGE_MAX_CHARS) -> list[str]:
+    text = str(text or "").strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        window = remaining[:limit]
+        split_at = window.rfind("\n")
+        if split_at < limit // 2:
+            split_at = window.rfind(" ")
+        if split_at < limit // 2:
+            split_at = limit
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def send_human_agent_message(chat_id: str, text: str) -> bool:
+    """Entrega a resposta de um atendente humano (vinda do Chatwoot) no WhatsApp.
+
+    Diferente do caminho da IA, NAO reaplicamos as regras de fatiamento por
+    perfil nem os delays de digitacao: o atendente digitou exatamente o que quer
+    enviar. So quebramos se a mensagem ultrapassar o teto de seguranca, e nao
+    espelhamos de volta no Chatwoot (a mensagem ja existe la).
+    """
+    parts = _chunk_human_message(text)
+    if not parts:
+        return True
+    for part in parts:
+        await send_text(chat_id, part, preview_seconds=0)
+    return True
+
 
 def log_webhook_debug(logger_enabled: bool, logger_obj, stage: str, data: dict) -> None:
     if not logger_enabled:
