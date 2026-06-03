@@ -7,8 +7,9 @@ from .chatwoot_integration import build_chatwoot_router
 from .config.settings import OPENAI_API_KEY, SUPABASE_ENABLED, SUPABASE_KEY, SUPABASE_URL
 from .core.profiles import log_profile_knowledge_status
 from .handlers.chat import build_chat_router
-from .handlers.waha_webhook import build_waha_router, send_text_parts
+from .handlers.waha_webhook import build_waha_router
 from .integrations.supabase import supabase_create_client
+from .services.message_service import send_human_agent_message
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -27,4 +28,4 @@ log_profile_knowledge_status()
 app = FastAPI()
 app.include_router(build_chat_router())
 app.include_router(build_waha_router())
-app.include_router(build_chatwoot_router(send_text_parts))
+app.include_router(build_chatwoot_router(send_human_agent_message))

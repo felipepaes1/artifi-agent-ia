@@ -132,11 +132,21 @@ class ChatwootService:
         contact_name: str,
         reason: str = "",
     ) -> bool:
-        if not self.config.account_mode:
-            return False
         chat_id = str(chat_id or "").strip()
         if not chat_id:
             return False
+        if not self.config.account_mode:
+            # Sem a API de conta do Chatwoot nao da para abrir/atualizar a
+            # conversa remota, mas ainda assim marcamos o handoff localmente
+            # para a IA parar de responder. Mantem o comportamento consistente
+            # com activate_human_handoff (resposta manual pelo WhatsApp).
+            return await self.activate_human_handoff(
+                chat_id=chat_id,
+                phone=phone,
+                contact_name=contact_name,
+                reason=reason,
+                create_note=False,
+            )
         phone_digits = _normalize_phone(phone) or _normalize_phone(chat_id)
         mapping = await self._ensure_mapping(
             chat_id=chat_id,

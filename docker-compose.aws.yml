@@ -149,6 +149,7 @@ services:
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     networks:
       - chatwoot_backend
+      - app_backend
     mem_limit: ${CHATWOOT_WORKER_MEM_LIMIT:-800m}
     logging: *default-logging
     restart: unless-stopped
@@ -159,6 +160,7 @@ services:
     environment:
       TZ: ${TZ:-America/Sao_Paulo}
       WAHA_API_KEY: ${WAHA_API_KEY_PLAIN}
+      WAHA_API_KEY_PLAIN: ${WAHA_API_KEY_PLAIN}
       WAHA_DASHBOARD_ENABLED: ${WAHA_DASHBOARD_ENABLED:-true}
       WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME}
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
@@ -215,6 +217,9 @@ services:
       SCHEDULE_DELAY_MS: ${SCHEDULE_DELAY_MS:-350}
       USER_MESSAGE_COALESCE_MS: ${USER_MESSAGE_COALESCE_MS:-800}
       USER_MESSAGE_COALESCE_MAX_MS: ${USER_MESSAGE_COALESCE_MAX_MS:-2500}
+      MAX_MESSAGE_AGE_SECONDS: ${MAX_MESSAGE_AGE_SECONDS:-120}
+      WARMUP_PERIOD_SECONDS: ${WARMUP_PERIOD_SECONDS:-300}
+      RECENT_EVENT_TTL_SECONDS: ${RECENT_EVENT_TTL_SECONDS:-90}
       MESSAGE_SPLIT_TARGET_CHARS: ${MESSAGE_SPLIT_TARGET_CHARS:-420}
       MESSAGE_SPLIT_MAX_CHARS: ${MESSAGE_SPLIT_MAX_CHARS:-720}
       AGENT_PROFILE_DB: /data/profile_state.db
