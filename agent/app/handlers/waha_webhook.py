@@ -220,6 +220,20 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
     if not chat_id:
         return {"ok": False, "error": "missing_chat_id"}
 
+    if is_lid_or_technical_chat_id(str(chat_id)):
+        resolved_phone = await get_contact_phone(str(chat_id))
+        if resolved_phone:
+            resolved_chat_id = f"{resolved_phone}@c.us"
+            if resolved_chat_id != str(chat_id):
+                logger.info(
+                    "Resolved WAHA LID poll target: original_chat_id=%s resolved_chat_id=%s",
+                    chat_id,
+                    resolved_chat_id,
+                )
+                chat_id = resolved_chat_id
+        else:
+            logger.warning("Could not resolve WhatsApp phone for poll LID chat_id=%s", chat_id)
+
     vote_id = vote.get("id") or payload.get("voteId")
     if vote_id and is_duplicate_key_global(
         RECENT_EVENT_IDS, f"poll:{vote_id}", RECENT_EVENT_TTL_SECONDS
