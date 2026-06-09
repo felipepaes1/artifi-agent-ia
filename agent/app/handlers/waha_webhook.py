@@ -85,6 +85,11 @@ from ..services.agent_service import (
     log_empty_output_diagnostics,
     run_agent,
 )
+from ..services.ai_pause_store import (
+    any_chat_paused,
+    is_chat_paused,
+    pause_chat_ids,
+)
 from ..services.audio_service import try_send_service_audio_for_message
 from ..services.conversation_service import (
     hydrate_session_from_supabase,
@@ -219,6 +224,10 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not chat_id:
         return {"ok": False, "error": "missing_chat_id"}
+
+    if is_chat_paused(str(chat_id)):
+        logger.info("AI poll vote suppressed by human pause: chat_id=%s", chat_id)
+        return {"ok": True, "ignored": "ai_paused"}
 
     vote_id = vote.get("id") or payload.get("voteId")
     if vote_id and is_duplicate_key_global(
@@ -594,11 +603,19 @@ def build_waha_router() -> APIRouter:
                     },
                 )
                 return {"ok": True, "ignored": "outbound_echo_text"}
-            # Invalidate any AI response that was already coalescing or being generated.
             next_chat_turn(str(chat_id))
             if original_chat_id != str(chat_id):
                 next_chat_turn(original_chat_id)
             manual_content = raw_body or build_chatwoot_media_content(payload)
+            paused_until = pause_chat_ids(
+                [str(chat_id), original_chat_id],
+                reason="manual whatsapp message",
+            )
+            logger.info(
+                "AI auto-pause activated by manual WhatsApp message: chat_id=%s paused_until=%s",
+                chat_id,
+                paused_until,
+            )
             await chatwoot_service.activate_human_handoff(
                 chat_id=str(chat_id),
                 phone=whatsapp_phone,
@@ -619,7 +636,11 @@ def build_waha_router() -> APIRouter:
                 chat_id,
                 manual_content[:120] if manual_content else "",
             )
-            return {"ok": True, "handoff": "manual_whatsapp_from_me"}
+            return {"ok": True, "handoff": "manual_whatsapp_from_me", "paused_until": paused_until}
+
+        if any_chat_paused([str(chat_id), original_chat_id]):
+            logger.info("AI reply suppressed by human pause: chat_id=%s", chat_id)
+            return {"ok": True, "ignored": "ai_paused"}
 
         if is_non_text_media(payload):
             media_content = build_chatwoot_media_content(payload)
