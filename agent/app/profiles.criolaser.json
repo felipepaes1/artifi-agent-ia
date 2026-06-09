@@ -1,0 +1,18 @@
+{
+  "pollName": "Perfil de atendimento",
+  "profiles": [
+    {
+      "id": "criolaser",
+      "label": "Estetica Tecnologica",
+      "instructions_path": "assistant_instructions_criolaser.txt",
+      "response_style": "direct",
+      "temperature": 0.2,
+      "max_tokens": 220,
+      "max_reply_chars": 350,
+      "greeting_name": "Criolaser",
+      "greeting_message": "tudo bem? Sou a assistente da Criolaser, como posso te ajudar?",
+      "docs_dir": "../../storage/criolaser",
+      "flow_path": "../../storage/criolaser/flow.json"
+    }
+  ]
+}

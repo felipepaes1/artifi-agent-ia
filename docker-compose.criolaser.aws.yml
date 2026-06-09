@@ -1,0 +1,150 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+name: criolaser-agent
+
+services:
+  traefik:
+    image: traefik:v3.6.7
+    container_name: criolaser_traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./volumes/criolaser/traefik:/letsencrypt
+    networks:
+      - proxy
+    logging: *default-logging
+    restart: unless-stopped
+
+  waha:
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
+    container_name: criolaser_waha
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      WAHA_API_KEY: ${WAHA_API_KEY_PLAIN}
+      WAHA_API_KEY_PLAIN: ${WAHA_API_KEY_PLAIN}
+      WAHA_DASHBOARD_ENABLED: ${WAHA_DASHBOARD_ENABLED:-true}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WAHA_PUBLIC_URL: https://${WAHA_HOST}
+      WAHA_ENGINE: ${WAHA_ENGINE:-WEBJS}
+      WAHA_LICENSE_KEY: ${WAHA_LICENSE_KEY:-}
+      WHATSAPP_DOWNLOAD_MEDIA: ${WHATSAPP_DOWNLOAD_MEDIA:-True}
+      WHATSAPP_HOOK_URL: http://agent:8000/webhook/waha
+      WHATSAPP_HOOK_EVENTS: ${WHATSAPP_HOOK_EVENTS:-message.any}
+      WAHA_LOG_LEVEL: ${WAHA_LOG_LEVEL:-info}
+      WAHA_HTTP_LOG_LEVEL: ${WAHA_HTTP_LOG_LEVEL:-warn}
+    volumes:
+      - ./volumes/criolaser/waha_sessions:/app/.sessions
+    networks:
+      - proxy
+      - app_backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=criolaser_proxy
+      - traefik.http.routers.criolaser_waha.rule=Host(`${WAHA_HOST}`)
+      - traefik.http.routers.criolaser_waha.entrypoints=websecure
+      - traefik.http.routers.criolaser_waha.tls.certresolver=le
+      - traefik.http.services.criolaser_waha.loadbalancer.server.port=3000
+    mem_limit: ${WAHA_MEM_LIMIT:-700m}
+    logging: *default-logging
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: criolaser_agent
+    depends_on:
+      - waha
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      OPENAI_MAX_TOKENS: ${OPENAI_MAX_TOKENS:-}
+      OPENAI_TRANSCRIBE_MODEL: ${OPENAI_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      OPENAI_TRANSCRIBE_LANGUAGE: ${OPENAI_TRANSCRIBE_LANGUAGE:-pt}
+      OPENAI_TTS_MODEL: ${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      OPENAI_TTS_VOICE: ${OPENAI_TTS_VOICE:-marin}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      GROQ_TEMPERATURE: ${GROQ_TEMPERATURE:-}
+      GROQ_MAX_TOKENS: ${GROQ_MAX_TOKENS:-}
+      SYSTEM_PROMPT: ${SYSTEM_PROMPT:-}
+      AGENT_PROMPT_PROFILE: ${AGENT_PROMPT_PROFILE:-criolaser}
+      AGENT_PROFILE_ROUTING: ${AGENT_PROFILE_ROUTING:-false}
+      AGENT_PROFILES_PATH: ${AGENT_PROFILES_PATH:-/app/app/profiles.criolaser.json}
+      ALLOW_GROUPS: ${ALLOW_GROUPS:-false}
+      MAX_REPLY_CHARS: ${MAX_REPLY_CHARS:-350}
+      MESSAGE_DELAY_MS: ${MESSAGE_DELAY_MS:-350}
+      FIRST_MESSAGE_DELAY_MS: ${FIRST_MESSAGE_DELAY_MS:-180}
+      SCHEDULE_DELAY_MS: ${SCHEDULE_DELAY_MS:-350}
+      USER_MESSAGE_COALESCE_MS: ${USER_MESSAGE_COALESCE_MS:-800}
+      USER_MESSAGE_COALESCE_MAX_MS: ${USER_MESSAGE_COALESCE_MAX_MS:-2500}
+      MAX_MESSAGE_AGE_SECONDS: ${MAX_MESSAGE_AGE_SECONDS:-120}
+      WARMUP_PERIOD_SECONDS: ${WARMUP_PERIOD_SECONDS:-300}
+      RECENT_EVENT_TTL_SECONDS: ${RECENT_EVENT_TTL_SECONDS:-90}
+      MESSAGE_SPLIT_TARGET_CHARS: ${MESSAGE_SPLIT_TARGET_CHARS:-420}
+      MESSAGE_SPLIT_MAX_CHARS: ${MESSAGE_SPLIT_MAX_CHARS:-720}
+      AGENT_PROFILE_DB: /data/profile_state.db
+      AGENT_SESSION_DB: /data/sessions.db
+      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
+      CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
+      CHATWOOT_API_ACCESS_TOKEN: ${CHATWOOT_API_ACCESS_TOKEN:-}
+      CHATWOOT_INBOX_ID: ${CHATWOOT_INBOX_ID:-}
+      CHATWOOT_INBOX_IDENTIFIER: ${CHATWOOT_INBOX_IDENTIFIER:-}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET:-}
+      CHATWOOT_STATE_DB: /data/chatwoot_state.db
+      CHATWOOT_AUTO_HANDOFF_ENABLED: ${CHATWOOT_AUTO_HANDOFF_ENABLED:-false}
+      CHATWOOT_AI_STATUS: ${CHATWOOT_AI_STATUS:-pending}
+      CHATWOOT_HUMAN_STATUS: ${CHATWOOT_HUMAN_STATUS:-open}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_TABLE: ${SUPABASE_TABLE:-conversations_agent_sessions}
+      SUPABASE_APP: ${SUPABASE_APP:-criolaser}
+      SUPABASE_ENABLED: ${SUPABASE_ENABLED:-true}
+      SUPABASE_SESSION_LIMIT: ${SUPABASE_SESSION_LIMIT:-12}
+      CRIOLASER_AUDIO_BUCKET: ${CRIOLASER_AUDIO_BUCKET:-audios_criolaser}
+      SESSION_MAX_ITEMS: ${SESSION_MAX_ITEMS:-0}
+      WAHA_BASE_URL: http://waha:3000
+      WAHA_API_KEY_PLAIN: ${WAHA_API_KEY_PLAIN:-}
+      WAHA_SESSION: ${WAHA_SESSION:-default}
+      AGENT_VECTOR_STORE_CRIOLASER: ${AGENT_VECTOR_STORE_CRIOLASER:-}
+    volumes:
+      - ./volumes/criolaser/agent_state:/data
+      - ./storage/criolaser:/storage/criolaser:ro
+    networks:
+      - proxy
+      - app_backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=criolaser_proxy
+      - traefik.http.routers.criolaser_agent.rule=Host(`${AGENT_HOST}`)
+      - traefik.http.routers.criolaser_agent.entrypoints=websecure
+      - traefik.http.routers.criolaser_agent.tls.certresolver=le
+      - traefik.http.services.criolaser_agent.loadbalancer.server.port=8000
+    mem_limit: ${AGENT_MEM_LIMIT:-700m}
+    logging: *default-logging
+    restart: unless-stopped
+
+networks:
+  proxy:
+    name: criolaser_proxy
+  app_backend:
+    internal: true

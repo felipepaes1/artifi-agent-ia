@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from ..chatwoot_integration import get_chatwoot_service
 from ..config.settings import (
     ALLOW_GROUPS,
+    CHATWOOT_AUTO_HANDOFF_ENABLED,
     LOG_WEBHOOK_DEBUG,
     LOG_WEBHOOK_PAYLOADS,
     OPENAI_API_KEY,
@@ -520,6 +521,10 @@ def build_waha_router() -> APIRouter:
         if not chat_id:
             return {"ok": False, "error": "missing chat_id"}
 
+        chat_id_lower = str(chat_id).lower()
+        if chat_id_lower.endswith("@broadcast") or chat_id_lower.endswith("@newsletter"):
+            return {"ok": True, "ignored": "broadcast"}
+
         if message_id:
             message_key = f"{chat_id}:{message_id}"
             if is_duplicate_key_global(
@@ -656,12 +661,14 @@ def build_waha_router() -> APIRouter:
             if chatwoot_service.is_human_handoff_active(str(chat_id)):
                 logger.info("AI reply suppressed by Chatwoot handoff: chat_id=%s type=media", chat_id)
                 return {"ok": True, "handoff": "human_media"}
-            handed = await chatwoot_service.handoff_to_human(
-                chat_id=str(chat_id),
-                phone=whatsapp_phone,
-                contact_name=name_from_payload(payload) or "",
-                reason=media_content,
-            )
+            handed = False
+            if CHATWOOT_AUTO_HANDOFF_ENABLED:
+                handed = await chatwoot_service.handoff_to_human(
+                    chat_id=str(chat_id),
+                    phone=whatsapp_phone,
+                    contact_name=name_from_payload(payload) or "",
+                    reason=media_content,
+                )
             if handed:
                 reply = (
                     "Recebi seu arquivo e vou encaminhar para a equipe analisar. "
@@ -702,12 +709,14 @@ def build_waha_router() -> APIRouter:
                 return {"ok": True, "handoff": "human_audio"}
             if not transcription:
                 active_turn = next_chat_turn(str(chat_id))
-                handed = await chatwoot_service.handoff_to_human(
-                    chat_id=str(chat_id),
-                    phone=whatsapp_phone,
-                    contact_name=name_from_payload(payload) or "",
-                    reason="[Audio recebido sem transcricao]",
-                )
+                handed = False
+                if CHATWOOT_AUTO_HANDOFF_ENABLED:
+                    handed = await chatwoot_service.handoff_to_human(
+                        chat_id=str(chat_id),
+                        phone=whatsapp_phone,
+                        contact_name=name_from_payload(payload) or "",
+                        reason="[Audio recebido sem transcricao]",
+                    )
                 if handed:
                     reply = (
                         "Recebi seu audio, mas nao consegui transcrever com seguranca. "
@@ -736,7 +745,7 @@ def build_waha_router() -> APIRouter:
             logger.info("AI reply suppressed by Chatwoot handoff: chat_id=%s type=text", chat_id)
             return {"ok": True, "handoff": "human_text"}
 
-        if chatwoot_service.should_request_human_handoff(body):
+        if CHATWOOT_AUTO_HANDOFF_ENABLED and chatwoot_service.should_request_human_handoff(body):
             handed = await chatwoot_service.handoff_to_human(
                 chat_id=str(chat_id),
                 phone=whatsapp_phone,
