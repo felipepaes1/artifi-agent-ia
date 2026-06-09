@@ -1,6 +1,8 @@
 # Secrets and local env
 .env
 .env.prod
+.env.aws
+env.aws
 .env.*
 !.env.example
 !.env.sample
