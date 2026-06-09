@@ -47,7 +47,13 @@ class ChatwootClient:
     async def search_contacts(self, query: str) -> list[dict[str, Any]]:
         if not self.config.account_mode or not query:
             return []
-        payload = await self._request_account("GET", "/contacts/search", params={"q": query})
+        try:
+            payload = await self._request_account("GET", "/contacts/search", params={"q": query})
+        except ChatwootApiError as exc:
+            if exc.status_code == 404:
+                logger.info("Chatwoot search_contacts returned 404 for query=%s; treating as no results", query)
+                return []
+            raise
         return self._unwrap_list(payload, "contacts")
 
     async def create_contact(self, *, identifier: str, name: str, phone_number: str) -> dict[str, Any]:

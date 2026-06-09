@@ -585,7 +585,16 @@ async def get_contact_info(chat_id: str) -> Optional[Dict[str, Any]]:
         if resp.status_code >= 400:
             logger.warning("WAHA contacts failed: %s %s", resp.status_code, resp.text)
             return None
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            logger.warning(
+                "WAHA contacts returned non-JSON for chat_id=%s: %s body=%s",
+                chat_id,
+                exc,
+                resp.text[:200],
+            )
+            return None
         if not isinstance(data, dict):
             return None
         return data

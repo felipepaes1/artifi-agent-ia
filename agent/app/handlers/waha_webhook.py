@@ -226,6 +226,20 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
     if not chat_id:
         return {"ok": False, "error": "missing_chat_id"}
 
+    if is_lid_or_technical_chat_id(str(chat_id)):
+        resolved_phone = await get_contact_phone(str(chat_id))
+        if resolved_phone:
+            resolved_chat_id = f"{resolved_phone}@c.us"
+            if resolved_chat_id != str(chat_id):
+                logger.info(
+                    "Resolved WAHA LID poll target: original_chat_id=%s resolved_chat_id=%s",
+                    chat_id,
+                    resolved_chat_id,
+                )
+                chat_id = resolved_chat_id
+        else:
+            logger.warning("Could not resolve WhatsApp phone for poll LID chat_id=%s", chat_id)
+
     if is_chat_paused(str(chat_id)):
         logger.info("AI poll vote suppressed by human pause: chat_id=%s", chat_id)
         return {"ok": True, "ignored": "ai_paused"}
