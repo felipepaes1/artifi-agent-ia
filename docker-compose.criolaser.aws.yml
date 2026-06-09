@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
 
   waha:
-    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
+    image: ${WAHA_IMAGE:-devlikeapro/waha-plus:latest}
     container_name: criolaser_waha
     environment:
       TZ: ${TZ:-America/Sao_Paulo}
