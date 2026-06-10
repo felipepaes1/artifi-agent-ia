@@ -1179,17 +1179,17 @@ def build_waha_router() -> APIRouter:
         if urgency_reply is not None:
             reply = urgency_reply
         else:
+            result = None
             try:
                 agent = get_agent(profile_id)
                 result = await run_agent(agent, body, session, str(chat_id), profile_id)
+                reply = truncate(
+                    sanitize_plain_text(extract_text_from_result(result), profile_id),
+                    profile_id,
+                )
             except Exception as exc:
                 logger.exception("Agent run failed: %s", exc)
-                raise HTTPException(status_code=502, detail="Agent run failed") from exc
-
-            reply = truncate(
-                sanitize_plain_text(extract_text_from_result(result), profile_id),
-                profile_id,
-            )
+                reply = ""
             if not reply:
                 log_empty_output_diagnostics(result, "regular_turn")
                 reply = "Desculpe, não consegui responder agora."

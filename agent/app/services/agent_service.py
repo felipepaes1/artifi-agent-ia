@@ -1,3 +1,4 @@
+import asyncio
 import contextvars
 import logging
 from typing import Any, Dict, Optional
@@ -9,7 +10,7 @@ try:
 except Exception:
     FileSearchTool = None
 
-from ..config.settings import OPENAI_MAX_TOKENS, OPENAI_MODEL, PROMPT_PROFILE, parse_int
+from ..config.settings import AGENT_RUN_TIMEOUT_SECONDS, OPENAI_MAX_TOKENS, OPENAI_MODEL, PROMPT_PROFILE, parse_int
 from ..core.profiles import (
     PROFILE_DEFAULT_ID,
     PROFILES,
@@ -228,7 +229,10 @@ async def run_agent(
     profile_token = CURRENT_PROFILE_ID.set(profile_id or "")
     input_token = CURRENT_USER_INPUT.set(input_text or "")
     try:
-        return await Runner.run(agent, input=input_text, session=session)
+        return await asyncio.wait_for(
+            Runner.run(agent, input=input_text, session=session),
+            timeout=AGENT_RUN_TIMEOUT_SECONDS,
+        )
     finally:
         CURRENT_USER_INPUT.reset(input_token)
         CURRENT_PROFILE_ID.reset(profile_token)

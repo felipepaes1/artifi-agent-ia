@@ -37,6 +37,7 @@ def parse_int(value: str) -> Optional[int]:
 OPENAI_API_KEY = env_first("OPENAI_API_KEY", "API_OPENAI_KEY")
 OPENAI_MODEL = env_first("OPENAI_MODEL", "OPENAI_DEFAULT_MODEL")
 OPENAI_MAX_TOKENS = env_first("OPENAI_MAX_TOKENS")
+AGENT_RUN_TIMEOUT_SECONDS = int(os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "60") or "60")
 OPENAI_TRANSCRIBE_MODEL = env_first("OPENAI_TRANSCRIBE_MODEL", default="gpt-4o-mini-transcribe")
 OPENAI_TRANSCRIBE_LANGUAGE = env_first("OPENAI_TRANSCRIBE_LANGUAGE", default="pt")
 OPENAI_TTS_MODEL = env_first("OPENAI_TTS_MODEL", default="gpt-4o-mini-tts")
