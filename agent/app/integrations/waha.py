@@ -841,12 +841,19 @@ async def send_poll(chat_id: str, question: str, options: list[str]) -> Optional
             data = resp.json()
         except Exception:
             return None
-    return (
+    poll_id = (
         data.get("id")
         or (data.get("poll") or {}).get("id")
         or (data.get("message") or {}).get("id")
         or (data.get("data") or {}).get("id")
     )
+    if poll_id:
+        remember_recent_key(
+            RECENT_OUTBOUND_MESSAGE_IDS,
+            str(poll_id),
+            OUTBOUND_ECHO_TTL_SECONDS,
+        )
+    return poll_id
 
 
 async def send_profile_poll(chat_id: str) -> Optional[str]:
