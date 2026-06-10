@@ -26,6 +26,7 @@ class ChatwootConfig:
     state_db_path: str = "chatwoot_state.db"
     ai_conversation_status: str = "pending"
     human_handoff_status: str = "open"
+    enabled: bool = True
 
     @property
     def account_mode(self) -> bool:
@@ -37,7 +38,7 @@ class ChatwootConfig:
 
     @property
     def sync_enabled(self) -> bool:
-        return self.account_mode or self.public_mode
+        return self.enabled and (self.account_mode or self.public_mode)
 
 
 class ChatwootClient:

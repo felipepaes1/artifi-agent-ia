@@ -1096,6 +1096,8 @@ def get_chatwoot_service() -> ChatwootService:
     if _SERVICE is None:
         _SERVICE = ChatwootService(
             ChatwootConfig(
+                enabled=os.getenv("CHATWOOT_SYNC_ENABLED", "true").strip().lower()
+                not in ("0", "false", "no", "off"),
                 base_url=os.getenv("CHATWOOT_BASE_URL", "").rstrip("/"),
                 account_id=os.getenv("CHATWOOT_ACCOUNT_ID", "").strip(),
                 api_access_token=os.getenv("CHATWOOT_API_ACCESS_TOKEN", "").strip(),
