@@ -602,11 +602,22 @@ async def get_contact_name(chat_id: str) -> Optional[str]:
     return None
 
 
+_RESOLVED_LID_PHONES: Dict[str, str] = {}
+
+
 async def get_contact_phone(chat_id: str) -> str:
     data = await get_contact_info(chat_id)
-    if not data:
-        return ""
-    return extract_phone_from_contact_info(data)
+    phone = extract_phone_from_contact_info(data) if data else ""
+    cache_key = str(chat_id or "")
+    if phone:
+        if cache_key:
+            _RESOLVED_LID_PHONES[cache_key] = phone
+        return phone
+    cached = _RESOLVED_LID_PHONES.get(cache_key)
+    if cached:
+        logger.info("Using cached phone for chat_id=%s (WAHA resolution failed)", chat_id)
+        return cached
+    return ""
 
 
 def waha_headers() -> Dict[str, str]:
