@@ -34,6 +34,7 @@ RECENT_OUTBOUND_MESSAGE_IDS: Dict[str, float] = {}
 RECENT_OUTBOUND_TEXT_KEYS: Dict[str, float] = {}
 RECENT_AUDIO_SENT_CHATS: Dict[str, float] = {}
 RECENT_SERVICE_AUDIO_KEYS: Dict[str, float] = {}
+RECENT_GREETING_SENT: Dict[str, float] = {}
 LAST_SCHEDULE_OPTIONS: Dict[str, Dict[str, Any]] = {}
 PENDING_USER_MESSAGES: Dict[str, Dict[str, Any]] = {}
 PENDING_USER_LOCKS: Dict[str, Any] = {}

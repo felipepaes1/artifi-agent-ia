@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from ..chatwoot_integration import get_chatwoot_service
 from ..config.settings import (
     ALLOW_GROUPS,
+    GREETING_THROTTLE_SECONDS,
     LOG_WEBHOOK_DEBUG,
     LOG_WEBHOOK_PAYLOADS,
     OPENAI_API_KEY,
@@ -34,6 +35,7 @@ from ..core.profiles import (
 )
 from ..core.state import (
     RECENT_EVENT_IDS,
+    RECENT_GREETING_SENT,
     RECENT_MESSAGE_KEYS,
     RECENT_POLL_SENT,
     RECENT_OUTBOUND_MESSAGE_IDS,
@@ -50,6 +52,7 @@ from ..core.state import (
     is_duplicate_key_global,
     next_chat_turn,
     peek_pending_signal_booking,
+    remember_recent_key,
     set_pending_signal_booking,
     update_profile_state,
 )
@@ -925,7 +928,11 @@ def build_waha_router() -> APIRouter:
                 logger.warning("Failed to reload trimmed session items: %s", exc)
                 items = items[-SESSION_MAX_ITEMS:]
 
-        if not has_profile_greeting(items, profile_id):
+        greeting_throttle_key = f"{str(chat_id)}:{profile_id}"
+        if not has_profile_greeting(items, profile_id) and not has_recent_key(
+            RECENT_GREETING_SENT, greeting_throttle_key, GREETING_THROTTLE_SECONDS
+        ):
+            remember_recent_key(RECENT_GREETING_SENT, greeting_throttle_key, GREETING_THROTTLE_SECONDS)
             payload_name = name_from_payload(payload)
             contact_name = payload_name or await get_contact_name(str(chat_id))
             first_name = (contact_name or "").strip().split()[0] if contact_name else None
