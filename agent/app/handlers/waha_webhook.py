@@ -204,11 +204,21 @@ async def sync_chatwoot_media_message(
     )
 
 
+def _poll_msg_hash(poll_id: object) -> str:
+    return str(poll_id or "").rsplit("_", 1)[-1]
+
+
 async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
     payload = data.get("payload") or {}
     message = payload.get("message") or {}
     vote = payload.get("vote") or payload.get("pollVote") or message.get("vote") or {}
     poll = payload.get("poll") or message.get("poll") or payload.get("pollUpdate") or {}
+    logger.info(
+        "Poll vote event: poll_fromMe=%s has_vote=%s has_poll=%s",
+        poll.get("fromMe"),
+        bool(vote),
+        bool(poll),
+    )
     if poll.get("fromMe") is False:
         return {"ok": True, "ignored": "not_our_poll"}
 
@@ -251,8 +261,24 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
 
     state = get_profile_state(str(chat_id))
     poll_id = poll.get("id") or payload.get("pollId") or payload.get("poll_id") or message.get("pollId")
-    if state.get("poll_id") and poll_id and state["poll_id"] != poll_id:
+    logger.info(
+        "Poll vote received: chat_id=%s stored_poll_id=%s vote_poll_id=%s fromMe=%s",
+        chat_id,
+        state.get("poll_id"),
+        poll_id,
+        poll.get("fromMe"),
+    )
+    if (
+        state.get("poll_id")
+        and poll_id
+        and _poll_msg_hash(state["poll_id"]) != _poll_msg_hash(poll_id)
+    ):
         if poll.get("fromMe") is not True:
+            logger.info(
+                "Poll vote ignored by poll_id mismatch: stored=%s vote=%s",
+                state.get("poll_id"),
+                poll_id,
+            )
             return {"ok": True, "ignored": "poll_id_mismatch"}
 
     selected_options = (
@@ -283,6 +309,11 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
                 normalized_options.append(str(entry))
     elif selected_options:
         normalized_options.append(str(selected_options))
+    logger.info(
+        "Poll vote options: chat_id=%s normalized_options=%s",
+        chat_id,
+        normalized_options,
+    )
     if not vote_id:
         poll_id = poll.get("id") or payload.get("pollId") or payload.get("poll_id")
         vote_key = {
