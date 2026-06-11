@@ -70,9 +70,9 @@
       "max_tokens": 220,
       "max_reply_chars": 350,
       "greeting_name": "Ódena",
-      "greeting_message": "tudo bem? Seja bem-vindo! Sou a assistente da Ódena ✨, como posso te ajudar?",
-      "docs_dir": "../../storage/odena",
-      "flow_path": "../../storage/odena/flow.json"
+      "greeting_message": "tudo bem? Que bom ter você por aqui! Sou a assistente da Ódena ✨ Como posso te ajudar hoje?",
+      "docs_dir": "../../storage/odena-1-version",
+      "flow_path": "../../storage/odena-1-version/flow.json"
     },
     {
       "id": "bella_vita",
