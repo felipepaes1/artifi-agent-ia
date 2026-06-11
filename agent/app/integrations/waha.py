@@ -31,8 +31,10 @@ from ..core.profiles import PROFILE_OPTIONS, PROFILE_POLL_NAME
 from ..core.state import (
     RECENT_OUTBOUND_MESSAGE_IDS,
     RECENT_OUTBOUND_TEXT_KEYS,
+    get_lid_phone,
     remember_recent_audio_sent,
     remember_recent_key,
+    store_lid_phone,
 )
 
 
@@ -403,6 +405,14 @@ def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = 
             "participant",
             "remoteJid",
             "remote_jid",
+            "remoteJidAlt",
+            "remote_jid_alt",
+            "participantAlt",
+            "participant_alt",
+            "senderPn",
+            "sender_pn",
+            "participantPn",
+            "participant_pn",
         ):
             value = item.get(key)
             if _looks_like_whatsapp_phone_id(value):
@@ -413,7 +423,20 @@ def extract_phone_from_payload(payload: Dict[str, Any], fallback_chat_id: str = 
 
         key_obj = item.get("key")
         if isinstance(key_obj, dict):
-            for key in ("remoteJid", "remote_jid", "participant", "from"):
+            for key in (
+                "remoteJid",
+                "remote_jid",
+                "participant",
+                "from",
+                "remoteJidAlt",
+                "remote_jid_alt",
+                "participantAlt",
+                "participant_alt",
+                "senderPn",
+                "sender_pn",
+                "participantPn",
+                "participant_pn",
+            ):
                 value = key_obj.get(key)
                 if _looks_like_whatsapp_phone_id(value):
                     return normalize_phone(str(value))
@@ -621,9 +644,11 @@ async def get_contact_phone(chat_id: str) -> str:
     if phone:
         if cache_key:
             _RESOLVED_LID_PHONES[cache_key] = phone
+            store_lid_phone(cache_key, phone)
         return phone
-    cached = _RESOLVED_LID_PHONES.get(cache_key)
+    cached = _RESOLVED_LID_PHONES.get(cache_key) or get_lid_phone(cache_key)
     if cached:
+        _RESOLVED_LID_PHONES[cache_key] = cached
         logger.info("Using cached phone for chat_id=%s (WAHA resolution failed)", chat_id)
         return cached
     return ""

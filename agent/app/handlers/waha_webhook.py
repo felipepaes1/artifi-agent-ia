@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from ..chatwoot_integration import get_chatwoot_service
 from ..config.settings import (
     ALLOW_GROUPS,
+    GREETING_DB_TTL_SECONDS,
     GREETING_THROTTLE_SECONDS,
     LOG_WEBHOOK_DEBUG,
     LOG_WEBHOOK_PAYLOADS,
@@ -50,11 +51,14 @@ from ..core.state import (
     is_chat_turn_current,
     is_duplicate_key,
     is_duplicate_key_global,
+    mark_chat_greeted,
     next_chat_turn,
     peek_pending_signal_booking,
     remember_recent_key,
     set_pending_signal_booking,
+    store_lid_phone,
     update_profile_state,
+    was_chat_greeted_recently,
 )
 from ..formatters.sanitizer import sanitize_plain_text, truncate
 from ..integrations.waha import (
@@ -95,6 +99,7 @@ from ..services.ai_pause_store import (
 )
 from ..services.audio_service import try_send_service_audio_for_message
 from ..services.conversation_service import (
+    adopt_chat_identity,
     hydrate_session_from_supabase,
     log_conversation,
     reset_session,
@@ -239,8 +244,9 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "missing_chat_id"}
 
     if is_lid_or_technical_chat_id(str(chat_id)):
-        resolved_phone = await get_contact_phone(str(chat_id))
+        resolved_phone = extract_phone_from_payload(payload, "") or await get_contact_phone(str(chat_id))
         if resolved_phone:
+            store_lid_phone(str(chat_id), resolved_phone)
             resolved_chat_id = f"{resolved_phone}@c.us"
             if resolved_chat_id != str(chat_id):
                 logger.info(
@@ -248,6 +254,7 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
                     chat_id,
                     resolved_chat_id,
                 )
+                await adopt_chat_identity(str(chat_id), resolved_chat_id)
                 chat_id = resolved_chat_id
         else:
             logger.warning("Could not resolve WhatsApp phone for poll LID chat_id=%s", chat_id)
@@ -360,6 +367,7 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
     contact_name = await get_contact_name(str(chat_id))
     first_name = (contact_name or "").strip().split()[0] if contact_name else None
     greeting = build_greeting(first_name, profile_id)
+    mark_chat_greeted(str(chat_id), profile_id)
 
     session = get_session(str(chat_id))
     agent = get_agent(profile_id)
@@ -438,14 +446,14 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
                 reply = "Desculpe, nao consegui responder agora."
                 reply = inject_fake_schedule(str(chat_id), pending_message, reply, has_scheduling_tool=SCHEDULING_TOOL is not None)
             reply = enforce_scheduling_entity_guardrail(profile_id, pending_message, reply)
-        combined = greeting if not reply else f"{greeting}\n\n{reply}"
-        await send_reply(
-            str(chat_id),
-            combined,
-            user_text=pending_message,
-            profile_id=profile_id,
-            active_turn=active_turn,
-        )
+        if reply:
+            await send_reply(
+                str(chat_id),
+                reply,
+                user_text=pending_message,
+                profile_id=profile_id,
+                active_turn=active_turn,
+            )
         await trim_session(session, SESSION_MAX_ITEMS)
         return {"ok": True, "profile_selected": profile_id, "handled_pending": True}
 
@@ -619,6 +627,7 @@ def build_waha_router() -> APIRouter:
             if not whatsapp_phone:
                 logger.warning("Could not resolve WhatsApp phone for LID chat_id=%s", chat_id)
         if whatsapp_phone and is_lid_or_technical_chat_id(str(chat_id)):
+            store_lid_phone(str(chat_id), whatsapp_phone)
             resolved_chat_id = f"{whatsapp_phone}@c.us"
             if resolved_chat_id != str(chat_id):
                 logger.info(
@@ -626,6 +635,7 @@ def build_waha_router() -> APIRouter:
                     chat_id,
                     resolved_chat_id,
                 )
+                await adopt_chat_identity(str(chat_id), resolved_chat_id)
                 chat_id = resolved_chat_id
         outbound_text_echo = has_recent_key(
             RECENT_OUTBOUND_TEXT_KEYS,
@@ -929,10 +939,15 @@ def build_waha_router() -> APIRouter:
                 items = items[-SESSION_MAX_ITEMS:]
 
         greeting_throttle_key = f"{str(chat_id)}:{profile_id}"
-        if not has_profile_greeting(items, profile_id) and not has_recent_key(
-            RECENT_GREETING_SENT, greeting_throttle_key, GREETING_THROTTLE_SECONDS
+        if (
+            not has_profile_greeting(items, profile_id)
+            and not has_recent_key(
+                RECENT_GREETING_SENT, greeting_throttle_key, GREETING_THROTTLE_SECONDS
+            )
+            and not was_chat_greeted_recently(str(chat_id), profile_id, GREETING_DB_TTL_SECONDS)
         ):
             remember_recent_key(RECENT_GREETING_SENT, greeting_throttle_key, GREETING_THROTTLE_SECONDS)
+            mark_chat_greeted(str(chat_id), profile_id)
             payload_name = name_from_payload(payload)
             contact_name = payload_name or await get_contact_name(str(chat_id))
             first_name = (contact_name or "").strip().split()[0] if contact_name else None
@@ -1019,14 +1034,15 @@ def build_waha_router() -> APIRouter:
                     reply = "Desculpe, nao consegui responder agora."
                 reply = enforce_scheduling_entity_guardrail(profile_id, body, reply)
                 reply = inject_fake_schedule(str(chat_id), body, reply, has_scheduling_tool=SCHEDULING_TOOL is not None)
-            combined = f"{greeting}\n\n{reply}"
-            await send_reply(
-                chat_id,
-                combined,
-                user_text=body,
-                profile_id=profile_id,
-                active_turn=active_turn,
-            )
+            combined = f"{greeting}\n\n{reply}" if reply else greeting
+            if reply:
+                await send_reply(
+                    chat_id,
+                    reply,
+                    user_text=body,
+                    profile_id=profile_id,
+                    active_turn=active_turn,
+                )
             await log_conversation(
                 str(chat_id),
                 payload,

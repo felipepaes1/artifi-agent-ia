@@ -2,12 +2,68 @@ import logging
 from typing import Any, Dict, Optional
 
 from ..config.settings import SESSION_MAX_ITEMS, SUPABASE_APP
+from ..core.state import (
+    copy_greeting_state,
+    get_profile_state,
+    get_session,
+    update_profile_state,
+)
 from ..integrations.supabase import supabase_fetch_recent, supabase_insert
 from ..integrations.supabase_agent import record_turn
 from ..integrations.waha import name_from_payload, normalize_phone
 
 
 logger = logging.getLogger("agent")
+
+
+async def adopt_chat_identity(old_chat_id: str, new_chat_id: str) -> None:
+    if not old_chat_id or not new_chat_id or old_chat_id == new_chat_id:
+        return
+    try:
+        new_session = get_session(new_chat_id)
+        new_items = await new_session.get_items()
+        if not new_items:
+            old_items = await get_session(old_chat_id).get_items()
+            if old_items:
+                await new_session.add_items(old_items)
+                logger.info(
+                    "Adopted session history: %s -> %s items=%s",
+                    old_chat_id,
+                    new_chat_id,
+                    len(old_items),
+                )
+    except Exception as exc:
+        logger.warning(
+            "Failed to adopt session history %s -> %s: %s", old_chat_id, new_chat_id, exc
+        )
+    try:
+        new_state = get_profile_state(new_chat_id)
+        if not (new_state.get("profile_id") or new_state.get("poll_id")):
+            old_state = get_profile_state(old_chat_id)
+            if (
+                old_state.get("profile_id")
+                or old_state.get("poll_id")
+                or old_state.get("pending_message")
+            ):
+                update_profile_state(
+                    new_chat_id,
+                    profile_id=old_state.get("profile_id"),
+                    poll_id=old_state.get("poll_id"),
+                    pending_message=old_state.get("pending_message"),
+                    flow_state=old_state.get("flow_state"),
+                    flow_data=old_state.get("flow_data") or {},
+                )
+                logger.info(
+                    "Adopted profile state: %s -> %s profile=%s",
+                    old_chat_id,
+                    new_chat_id,
+                    old_state.get("profile_id"),
+                )
+    except Exception as exc:
+        logger.warning(
+            "Failed to adopt profile state %s -> %s: %s", old_chat_id, new_chat_id, exc
+        )
+    copy_greeting_state(old_chat_id, new_chat_id)
 
 
 async def hydrate_session_from_supabase(session, chat_id: str) -> None:

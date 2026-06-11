@@ -210,6 +210,25 @@ def init_profile_state_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS greeting_state (
+                chat_id TEXT NOT NULL,
+                profile_id TEXT NOT NULL DEFAULT '',
+                greeted_at INTEGER,
+                PRIMARY KEY (chat_id, profile_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lid_phone_map (
+                lid TEXT PRIMARY KEY,
+                phone TEXT,
+                updated_at INTEGER
+            )
+            """
+        )
         conn.commit()
     except Exception as exc:
         logger.warning("Failed to init profile state db: %s", exc)
@@ -344,6 +363,116 @@ def update_profile_state(
         conn.commit()
     except Exception as exc:
         logger.warning("Failed to update profile state: %s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def mark_chat_greeted(chat_id: str, profile_id: Optional[str]) -> None:
+    if not chat_id:
+        return
+    try:
+        conn = sqlite3.connect(PROFILE_STATE_DB)
+        conn.execute(
+            """
+            INSERT INTO greeting_state (chat_id, profile_id, greeted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chat_id, profile_id) DO UPDATE SET greeted_at=excluded.greeted_at
+            """,
+            (str(chat_id), str(profile_id or ""), int(time.time())),
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.warning("Failed to mark chat greeted: %s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def was_chat_greeted_recently(chat_id: str, profile_id: Optional[str], ttl_seconds: int) -> bool:
+    if not chat_id or ttl_seconds <= 0:
+        return False
+    try:
+        conn = sqlite3.connect(PROFILE_STATE_DB)
+        row = conn.execute(
+            "SELECT greeted_at FROM greeting_state WHERE chat_id = ? AND profile_id = ?",
+            (str(chat_id), str(profile_id or "")),
+        ).fetchone()
+        return bool(row and row[0] and (time.time() - int(row[0])) < ttl_seconds)
+    except Exception as exc:
+        logger.warning("Failed to read greeting state: %s", exc)
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def copy_greeting_state(old_chat_id: str, new_chat_id: str) -> None:
+    if not old_chat_id or not new_chat_id or old_chat_id == new_chat_id:
+        return
+    try:
+        conn = sqlite3.connect(PROFILE_STATE_DB)
+        conn.execute(
+            """
+            INSERT INTO greeting_state (chat_id, profile_id, greeted_at)
+            SELECT ?, profile_id, greeted_at FROM greeting_state WHERE chat_id = ?
+            ON CONFLICT(chat_id, profile_id)
+            DO UPDATE SET greeted_at = MAX(greeting_state.greeted_at, excluded.greeted_at)
+            """,
+            (str(new_chat_id), str(old_chat_id)),
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.warning("Failed to copy greeting state: %s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def store_lid_phone(lid: str, phone: str) -> None:
+    if not lid or not phone:
+        return
+    try:
+        conn = sqlite3.connect(PROFILE_STATE_DB)
+        conn.execute(
+            """
+            INSERT INTO lid_phone_map (lid, phone, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(lid) DO UPDATE SET phone=excluded.phone, updated_at=excluded.updated_at
+            """,
+            (str(lid), str(phone), int(time.time())),
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.warning("Failed to store LID phone mapping: %s", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def get_lid_phone(lid: str) -> str:
+    if not lid:
+        return ""
+    try:
+        conn = sqlite3.connect(PROFILE_STATE_DB)
+        row = conn.execute(
+            "SELECT phone FROM lid_phone_map WHERE lid = ?",
+            (str(lid),),
+        ).fetchone()
+        return str(row[0]) if row and row[0] else ""
+    except Exception as exc:
+        logger.warning("Failed to read LID phone mapping: %s", exc)
+        return ""
     finally:
         try:
             conn.close()

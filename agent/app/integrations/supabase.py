@@ -63,20 +63,22 @@ async def supabase_insert(row: Dict[str, Any]) -> None:
 
 async def supabase_fetch_recent(phone: str, chat_id: Optional[str] = None) -> list[Dict[str, Any]]:
     client = get_supabase_client()
-    if not client or not SUPABASE_TABLE or not phone or SUPABASE_SESSION_LIMIT <= 0:
+    if not client or not SUPABASE_TABLE or SUPABASE_SESSION_LIMIT <= 0:
+        return []
+    if not phone and not chat_id:
         return []
 
     def fetch() -> list[Dict[str, Any]]:
-        query = client.table(SUPABASE_TABLE).select("user_message, bot_message, created_at").eq(
-            "phone", phone
-        )
+        query = client.table(SUPABASE_TABLE).select("user_message, bot_message, created_at")
+        if phone:
+            query = query.eq("phone", phone)
         if SUPABASE_APP:
             query = query.eq("app", SUPABASE_APP)
         if chat_id:
             query = query.eq("conversation_id", chat_id)
         resp = query.order("created_at", desc=True).limit(SUPABASE_SESSION_LIMIT).execute()
         data = list(resp.data or [])
-        if data or not chat_id:
+        if data or not chat_id or not phone:
             return data
         fallback = client.table(SUPABASE_TABLE).select("user_message, bot_message, created_at").eq(
             "phone", phone

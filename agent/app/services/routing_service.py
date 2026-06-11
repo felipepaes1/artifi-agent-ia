@@ -24,6 +24,8 @@ def wants_profile_switch(text: str) -> bool:
     if not text:
         return False
     lowered = normalize_text(text)
+    if len(lowered.split()) > 5:
+        return False
     if any(token in lowered for token in ("trocar", "mudar", "alterar", "testar", "outro", "outra")):
         if any(token in lowered for token in ("assistente", "clinica", "perfil", "setor", "atendimento")):
             return True
