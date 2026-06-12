@@ -99,6 +99,7 @@ from app.integrations.waha import (  # noqa: E402
     extract_phone_from_contact_info,
     extract_phone_from_payload,
     infer_chatwoot_file_type,
+    name_from_payload,
     normalize_phone,
 )
 
@@ -146,6 +147,12 @@ class FakeMappingChatwootClient:
         }
         self.created_contacts.append(contact)
         return contact
+
+    async def get_contact(self, contact_id: int) -> dict[str, Any]:
+        for contact in self.search_contacts_result + self.created_contacts:
+            if contact.get("id") == contact_id:
+                return contact
+        return {}
 
     async def update_contact(
         self,
@@ -566,7 +573,7 @@ async def test_whatsapp_phone_format_for_chatwoot_contact(failures: list[str]) -
                     "id": 18,
                     "identifier": "555599069114@c.us",
                     "name": "+55 (55) 9906-9114",
-                    "phone_number": "+555599069114",
+                    "phone_number": "",
                 }
             ],
             "corrige contato antigo criado com lid",
@@ -609,6 +616,185 @@ async def test_whatsapp_phone_format_for_chatwoot_contact(failures: list[str]) -
     assert_equal(normalize_phone("71330884006023@lid"), "", "lid nao vira telefone", failures)
 
 
+async def test_contact_name_priority(failures: list[str]) -> None:
+    def make_service(tmpdir: str) -> ChatwootService:
+        return ChatwootService(
+            ChatwootConfig(
+                base_url="https://chatwoot.example",
+                account_id="1",
+                api_access_token="token",
+                inbox_id="6",
+                state_db_path=os.path.join(tmpdir, "cw.db"),
+            )
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = make_service(tmpdir)
+        fake_client = FakeMappingChatwootClient()
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="5543991134462@c.us",
+            phone="5543991134462",
+            contact_name="Felipe",
+            content="Oi",
+            message_id="wa-name-1",
+        )
+        assert_equal(
+            fake_client.created_contacts[0]["name"] if fake_client.created_contacts else None,
+            "Felipe",
+            "pushName usado ao criar contato",
+            failures,
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = make_service(tmpdir)
+        fake_client = FakeMappingChatwootClient()
+        fake_client.search_contacts_result = [
+            {
+                "id": 30,
+                "identifier": "5543991134462@c.us",
+                "name": "+55 (43) 99113-4462",
+                "phone_number": "+5543991134462",
+                "contact_inboxes": [
+                    {"source_id": "5543991134462@c.us", "inbox": {"id": 6}}
+                ],
+            }
+        ]
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="5543991134462@c.us",
+            phone="5543991134462",
+            contact_name="Felipe",
+            content="Oi",
+            message_id="wa-name-2",
+        )
+        assert_equal(
+            fake_client.updated_contacts,
+            [{"id": 30, "identifier": "", "name": "Felipe", "phone_number": ""}],
+            "pushName substitui nome fallback de telefone",
+            failures,
+        )
+        mapping = service.store.get_by_chat_id("5543991134462@c.us")
+        assert_equal(
+            mapping.contact_name if mapping else None,
+            "Felipe",
+            "mapping guarda pushName apos upgrade",
+            failures,
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = make_service(tmpdir)
+        fake_client = FakeMappingChatwootClient()
+        fake_client.search_contacts_result = [
+            {
+                "id": 31,
+                "identifier": "5543991134462@c.us",
+                "name": "Cliente Vip",
+                "phone_number": "+5543991134462",
+                "contact_inboxes": [
+                    {"source_id": "5543991134462@c.us", "inbox": {"id": 6}}
+                ],
+            }
+        ]
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="5543991134462@c.us",
+            phone="5543991134462",
+            contact_name="Felipe",
+            content="Oi",
+            message_id="wa-name-3",
+        )
+        assert_equal(
+            fake_client.updated_contacts,
+            [],
+            "nome salvo pelo atendente nao e sobrescrito",
+            failures,
+        )
+        mapping = service.store.get_by_chat_id("5543991134462@c.us")
+        assert_equal(
+            mapping.contact_name if mapping else None,
+            "Cliente Vip",
+            "mapping guarda nome salvo pelo atendente",
+            failures,
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = make_service(tmpdir)
+        fake_client = FakeMappingChatwootClient()
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="5543991134462@c.us",
+            phone="5543991134462",
+            contact_name="",
+            content="Oi",
+            message_id="wa-name-4",
+        )
+        fake_client.created_contacts[0]["name"] = "Cliente Vip"
+        await service.sync_incoming_whatsapp_message(
+            chat_id="5543991134462@c.us",
+            phone="5543991134462",
+            contact_name="Felipe",
+            content="Oi de novo",
+            message_id="wa-name-5",
+        )
+        assert_equal(
+            fake_client.updated_contacts,
+            [],
+            "rename do atendente vence pushName em conversa ativa",
+            failures,
+        )
+        mapping = service.store.get_by_chat_id("5543991134462@c.us")
+        assert_equal(
+            mapping.contact_name if mapping else None,
+            "Cliente Vip",
+            "mapping sincroniza nome remoto em conversa ativa",
+            failures,
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        service = make_service(tmpdir)
+        fake_client = FakeMappingChatwootClient()
+        service.client = fake_client  # type: ignore[assignment]
+
+        await service.sync_incoming_whatsapp_message(
+            chat_id="5543991134462@c.us",
+            phone="5543991134462",
+            contact_name="",
+            content="Oi",
+            message_id="wa-name-6",
+        )
+        await service.sync_incoming_whatsapp_message(
+            chat_id="5543991134462@c.us",
+            phone="5543991134462",
+            contact_name="Felipe",
+            content="Oi de novo",
+            message_id="wa-name-7",
+        )
+        assert_equal(
+            fake_client.updated_contacts,
+            [{"id": 15, "identifier": "", "name": "Felipe", "phone_number": ""}],
+            "pushName atualiza contato fallback em conversa ativa",
+            failures,
+        )
+
+    assert_equal(
+        name_from_payload({"from": "5543991134462@c.us", "_data": {"pushName": "Maria"}}),
+        "Maria",
+        "pushName aninhado em _data e extraido",
+        failures,
+    )
+    assert_equal(
+        name_from_payload({"fromMe": True, "_data": {"pushName": "Clinica"}}),
+        None,
+        "pushName de mensagem fromMe e ignorado",
+        failures,
+    )
+
+
 def test_media_helpers(failures: list[str]) -> None:
     audio_payload = {"type": "audio", "mimetype": "audio/ogg"}
     assert_equal(infer_chatwoot_file_type(audio_payload), "audio", "file_type audio", failures)
@@ -633,6 +819,7 @@ async def main() -> int:
     await test_human_message_sets_handoff(failures)
     await test_manual_whatsapp_handoff_sets_human(failures)
     await test_whatsapp_phone_format_for_chatwoot_contact(failures)
+    await test_contact_name_priority(failures)
     test_media_helpers(failures)
 
     if failures:

@@ -643,27 +643,43 @@ class ChatwootService:
         if existing and _normalize_chatwoot_status(existing.conversation_status) == "resolved":
             existing.conversation_id = None
         if existing and existing.contact_source_id and existing.conversation_id:
-            existing_name = existing.contact_name
-            if (
-                (contact_display_name and contact_display_name != existing.contact_name)
-                or (phone and phone != existing.phone)
-                or (identifier and identifier != existing.identifier)
-            ):
-                existing.contact_name = contact_display_name or existing.contact_name
-                existing.phone = phone or existing.phone
-                existing.identifier = identifier or existing.identifier
-                self.store.upsert_mapping(existing)
-            if (
-                self.config.account_mode
-                and existing.contact_id
-                and _should_repair_contact_name(existing_name, contact_name, contact_display_name)
-            ):
-                await self._update_account_contact(
-                    contact_id=int(existing.contact_id),
-                    identifier=identifier,
-                    display_name=contact_display_name,
-                    phone_number=_format_phone_number(phone),
+            changed = False
+            if phone and phone != existing.phone:
+                existing.phone = phone
+                changed = True
+            if identifier and identifier != existing.identifier:
+                existing.identifier = identifier
+                changed = True
+            if self.config.account_mode and existing.contact_id:
+                candidate = _pick_contact_name_update(
+                    contact_name, contact_display_name, existing.contact_name
                 )
+                if candidate:
+                    remote_name = await self._fetch_remote_contact_name(int(existing.contact_id))
+                    confirmed = _pick_contact_name_update(
+                        contact_name, contact_display_name, remote_name or existing.contact_name
+                    )
+                    if confirmed:
+                        await self._update_account_contact(
+                            contact_id=int(existing.contact_id),
+                            identifier="",
+                            display_name=confirmed,
+                            phone_number="",
+                        )
+                        existing.contact_name = confirmed
+                        changed = True
+                    elif remote_name and remote_name != existing.contact_name:
+                        existing.contact_name = remote_name
+                        changed = True
+            elif (
+                contact_display_name
+                and contact_display_name != existing.contact_name
+                and _is_fallback_contact_name(existing.contact_name)
+            ):
+                existing.contact_name = contact_display_name
+                changed = True
+            if changed:
+                self.store.upsert_mapping(existing)
             return existing
 
         if self.config.account_mode:
@@ -699,7 +715,7 @@ class ChatwootService:
         contact_source_id = existing.contact_source_id if existing else ""
         phone_number = _format_phone_number(phone)
         display_name = _contact_display_name(contact_name, phone, identifier)
-        picked_contact: dict[str, Any] = {}
+        remote_contact: dict[str, Any] = {}
 
         if not contact_id:
             contacts = await self.client.search_contacts(identifier)
@@ -707,33 +723,41 @@ class ChatwootService:
                 contacts.extend(await self.client.search_contacts(phone))
             contact = self._pick_contact(contacts, identifier=identifier, phone=phone)
             if contact:
-                picked_contact = contact
+                remote_contact = contact
                 contact_id = _coerce_int(contact.get("id"))
                 contact_source_id = self._extract_contact_source_id(contact) or contact_source_id
 
         if not contact_id:
-            created_contact = await self.client.create_contact(
+            remote_contact = await self.client.create_contact(
                 identifier=identifier,
                 name=display_name,
                 phone_number=phone_number,
             )
-            picked_contact = created_contact
-            contact_id = _coerce_int(created_contact.get("id"))
-            contact_source_id = self._extract_contact_source_id(created_contact)
-        elif _should_update_existing_contact(
-            picked_contact=picked_contact,
-            stored_name=existing.contact_name if existing else "",
-            requested_name=contact_name,
-            display_name=display_name,
-            phone_number=phone_number,
-            identifier=identifier,
-        ):
-            await self._update_account_contact(
-                contact_id=int(contact_id),
-                identifier=identifier,
-                display_name=display_name,
-                phone_number=phone_number,
-            )
+            contact_id = _coerce_int(remote_contact.get("id"))
+            contact_source_id = self._extract_contact_source_id(remote_contact)
+        else:
+            if not remote_contact:
+                remote_contact = await self._fetch_remote_contact(int(contact_id))
+            if remote_contact:
+                remote_name = str(remote_contact.get("name") or "").strip()
+                remote_phone = _format_phone_number(str(remote_contact.get("phone_number") or ""))
+                remote_identifier = str(remote_contact.get("identifier") or "").strip()
+                name_update = _pick_contact_name_update(contact_name, display_name, remote_name)
+                phone_update = (
+                    phone_number if phone_number and remote_phone != phone_number else ""
+                )
+                identifier_update = (
+                    identifier if identifier and remote_identifier != identifier else ""
+                )
+                if name_update or phone_update or identifier_update:
+                    await self._update_account_contact(
+                        contact_id=int(contact_id),
+                        identifier=identifier_update,
+                        display_name=name_update,
+                        phone_number=phone_update,
+                    )
+                    if name_update:
+                        remote_contact = {**remote_contact, "name": name_update}
 
         if contact_id and not contact_source_id:
             contact_source_id = self._pick_contactable_source_id(
@@ -773,10 +797,16 @@ class ChatwootService:
         else:
             handoff_state = "ai"
 
+        remote_name = str((remote_contact or {}).get("name") or "").strip()
+        if remote_name and not _is_fallback_contact_name(remote_name):
+            mapped_name = remote_name
+        else:
+            mapped_name = display_name or (existing.contact_name if existing else "")
+
         return ChatwootMapping(
             whatsapp_chat_id=chat_id,
             phone=phone,
-            contact_name=display_name or (existing.contact_name if existing else ""),
+            contact_name=mapped_name,
             contact_id=contact_id,
             contact_source_id=contact_source_id,
             conversation_id=conversation_id,
@@ -935,6 +965,22 @@ class ChatwootService:
             if target_inbox_id and inbox_id == target_inbox_id:
                 return source_id
         return fallback
+
+    async def _fetch_remote_contact(self, contact_id: int) -> dict[str, Any]:
+        try:
+            return await self.client.get_contact(int(contact_id)) or {}
+        except ChatwootApiError as exc:
+            logger.warning(
+                "Chatwoot contact fetch failed: contact_id=%s status=%s response=%s",
+                contact_id,
+                exc.status_code,
+                exc.response_text,
+            )
+            return {}
+
+    async def _fetch_remote_contact_name(self, contact_id: int) -> str:
+        contact = await self._fetch_remote_contact(contact_id)
+        return str(contact.get("name") or "").strip()
 
     async def _update_account_contact(
         self,
@@ -1290,37 +1336,32 @@ def _contact_display_name(contact_name: str, phone: str, identifier: str) -> str
     return "WhatsApp"
 
 
-def _should_repair_contact_name(
-    existing_name: str,
-    requested_name: str,
-    display_name: str,
-) -> bool:
-    if not display_name:
-        return False
-    if requested_name and not _is_technical_contact_name(requested_name):
+def _is_fallback_contact_name(value: str) -> bool:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
         return True
-    return _is_technical_contact_name(existing_name) or not str(existing_name or "").strip()
+    if text.lower() == "whatsapp":
+        return True
+    if _is_technical_contact_name(text):
+        return True
+    digits = "".join(ch for ch in text if ch.isdigit())
+    has_letters = any(ch.isalpha() for ch in text)
+    return len(digits) >= 8 and not has_letters
 
 
-def _should_update_existing_contact(
-    *,
-    picked_contact: dict[str, Any],
-    stored_name: str,
-    requested_name: str,
-    display_name: str,
-    phone_number: str,
-    identifier: str,
-) -> bool:
-    current_name = str((picked_contact or {}).get("name") or stored_name or "").strip()
-    current_phone = _format_phone_number(str((picked_contact or {}).get("phone_number") or ""))
-    current_identifier = str((picked_contact or {}).get("identifier") or "").strip()
-    if _should_repair_contact_name(current_name, requested_name, display_name):
-        return True
-    if phone_number and current_phone != phone_number:
-        return True
-    if identifier and current_identifier and _is_technical_contact_name(current_identifier):
-        return True
-    return False
+def _pick_contact_name_update(requested_name: str, display_name: str, remote_name: str) -> str:
+    remote = " ".join(str(remote_name or "").split()).strip()
+    requested = " ".join(str(requested_name or "").split()).strip()
+    if requested and _is_fallback_contact_name(requested):
+        requested = ""
+    if requested:
+        if requested != remote and _is_fallback_contact_name(remote):
+            return requested
+        return ""
+    display = " ".join(str(display_name or "").split()).strip()
+    if display and display != remote and (not remote or _is_technical_contact_name(remote)):
+        return display
+    return ""
 
 
 def _format_phone_number(phone: str) -> str:

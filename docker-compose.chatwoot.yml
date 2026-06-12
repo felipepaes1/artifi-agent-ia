@@ -50,6 +50,7 @@ services:
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     networks:
       - chatwoot_backend
+      - proxy
     restart: unless-stopped
 
   chatwoot_postgres:

@@ -729,7 +729,11 @@ def has_profile_greeting(items: list[dict[str, Any]], profile_id: Optional[str])
         if item.get("role") != "assistant":
             continue
         content = " ".join(normalize_text(item.get("content") or "").split())
+        if not content:
+            continue
         if marker and marker in content:
+            return True
+        if "assistente" in content and ("sou a " in content or "sou o " in content):
             return True
     return False
 

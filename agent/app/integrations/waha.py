@@ -49,10 +49,19 @@ def log_webhook_debug(stage: str, data: Dict[str, Any]) -> None:
 
 
 def name_from_payload(payload: Dict[str, Any]) -> Optional[str]:
-    if not payload:
+    if not payload or is_from_me_payload(payload):
         return None
+    candidates: list[str] = []
     for key in ("pushName", "pushname", "notifyName", "name", "senderName", "contactName"):
-        value = (payload.get(key) or "").strip()
+        candidates.append(str(payload.get(key) or "").strip())
+    data = payload.get("_data")
+    if isinstance(data, dict):
+        for key in ("pushName", "pushname", "notifyName", "verifiedBizName"):
+            candidates.append(str(data.get(key) or "").strip())
+        info = data.get("Info")
+        if isinstance(info, dict):
+            candidates.append(str(info.get("PushName") or "").strip())
+    for value in candidates:
         if value and not _looks_like_technical_whatsapp_name(value):
             return value
     return None

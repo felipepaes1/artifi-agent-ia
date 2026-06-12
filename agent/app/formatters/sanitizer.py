@@ -107,7 +107,7 @@ def _trim_dangling_tail_in_paragraph(paragraph: str) -> str:
     tail = stripped[last_terminal + 1 :].strip()
     if not tail:
         return stripped
-    if " " not in tail and len(tail) <= 15:
+    if " " not in tail and len(tail) <= 15 and any(ch.isalnum() for ch in tail):
         logger.warning("Dropped dangling tail fragment from reply: %r", tail[:40])
         return stripped[: last_terminal + 1].rstrip()
     return stripped

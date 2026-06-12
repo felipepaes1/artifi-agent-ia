@@ -59,7 +59,7 @@ def _split_into_sentences(text: str) -> list[str]:
         while k >= 0 and cleaned[k].isalpha():
             k -= 1
         word = cleaned[k + 1 : punct_pos].lower()
-        if word in _ABBREVIATIONS:
+        if word in _ABBREVIATIONS or len(word) == 1:
             continue
         end = match.end(1)
         pieces.append(cleaned[last_pos:end].strip())
@@ -184,6 +184,13 @@ def split_long_chunk(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
+def _is_question_part(text: str) -> bool:
+    stripped = (text or "").rstrip()
+    while stripped and not stripped[-1].isalnum() and stripped[-1] not in "?!…":
+        stripped = stripped[:-1].rstrip()
+    return stripped.endswith("?")
+
+
 def merge_short_whatsapp_parts(
     parts: list[str],
     target_chars: int,
@@ -207,7 +214,7 @@ def merge_short_whatsapp_parts(
         is_short = len(text) <= short_limit
         emoji_or_punct_only = is_emoji_or_punctuation_only(text)
         same_message_budget = len(prev) + len(text) + 2 <= target_chars
-        is_question = text.endswith("?")
+        is_question = _is_question_part(text)
         # Previous part ending in ":" is an introducer — always keep its
         # follow-up attached so users don't get a "me informe:" dangling alone.
         prev_is_introducer = prev.rstrip().endswith(":")

@@ -81,6 +81,12 @@ class ChatwootClient:
 
         return {}
 
+    async def get_contact(self, contact_id: int) -> dict[str, Any]:
+        if not self.config.account_mode or not contact_id:
+            return {}
+        payload = await self._request_account("GET", f"/contacts/{contact_id}")
+        return self._unwrap_dict(payload, "contact")
+
     async def update_contact(
         self,
         contact_id: int,

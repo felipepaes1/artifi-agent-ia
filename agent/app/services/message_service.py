@@ -62,7 +62,13 @@ async def send_human_agent_message(chat_id: str, text: str) -> bool:
     if not parts:
         return True
     for part in parts:
-        await send_text(chat_id, part, preview_seconds=0)
+        try:
+            await send_text(chat_id, part, preview_seconds=0)
+        except Exception as exc:
+            logger.warning(
+                "Human agent message delivery failed chat=%s: %s", chat_id, exc
+            )
+            return False
     return True
 
 
