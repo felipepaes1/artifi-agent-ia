@@ -697,6 +697,22 @@ def build_waha_router() -> APIRouter:
             return {"ok": True, "handoff": "manual_whatsapp_from_me", "paused_until": paused_until}
 
         if any_chat_paused([str(chat_id), original_chat_id]):
+            if is_non_text_media(payload) or is_audio_payload(payload):
+                await sync_chatwoot_media_message(
+                    chat_id=str(chat_id),
+                    phone=whatsapp_phone,
+                    payload=payload,
+                    content=build_chatwoot_media_content(payload),
+                    message_id=chatwoot_message_id,
+                )
+            elif raw_body:
+                await chatwoot_service.sync_incoming_whatsapp_message(
+                    chat_id=str(chat_id),
+                    phone=whatsapp_phone,
+                    contact_name=name_from_payload(payload) or "",
+                    content=raw_body,
+                    message_id=chatwoot_message_id,
+                )
             logger.info("AI reply suppressed by human pause: chat_id=%s", chat_id)
             return {"ok": True, "ignored": "ai_paused"}
 

@@ -54,6 +54,11 @@ if not INSTRUCTIONS_PATH:
         INSTRUCTIONS_PATH = os.path.join(PROMPTS_DIR, f"{PROMPT_PROFILE}.txt")
     else:
         INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assistant_instructions.txt")
+BASE_INSTRUCTIONS_PATH = os.getenv("AGENT_BASE_INSTRUCTIONS_PATH", "").strip()
+if not BASE_INSTRUCTIONS_PATH:
+    BASE_INSTRUCTIONS_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "assistant_instructions_base.txt"
+    )
 SESSION_DB_PATH = os.getenv("AGENT_SESSION_DB", "sessions.db").strip() or "sessions.db"
 ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "false").lower() == "true"
 MAX_REPLY_CHARS = int(os.getenv("MAX_REPLY_CHARS", "1200"))

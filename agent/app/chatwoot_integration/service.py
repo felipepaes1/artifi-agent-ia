@@ -11,6 +11,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from .client import ChatwootApiError, ChatwootClient, ChatwootConfig
 from .store import ChatwootMapping, ChatwootStore
+from ..core.state import get_lids_for_phone
+from ..services.ai_pause_store import clear_pause_ids
 
 
 logger = logging.getLogger("agent.chatwoot")
@@ -1005,6 +1007,40 @@ class ChatwootService:
                 exc.response_text,
             )
 
+    def _resume_ai_for_conversation(
+        self,
+        payload: dict[str, Any],
+        current: Optional[ChatwootMapping],
+        conversation_id: Optional[int],
+    ) -> None:
+        chat_id = str(current.whatsapp_chat_id if current else "").strip()
+        if not chat_id:
+            chat_id = self._extract_chat_id(payload) or self._extract_chat_id(
+                {"conversation": payload}
+            )
+        phone = _normalize_phone(current.phone if current else "")
+        if not phone:
+            phone = (
+                self._extract_phone(payload)
+                or self._extract_phone({"conversation": payload})
+                or _normalize_phone(chat_id)
+            )
+        chat_ids: list[str] = []
+        if chat_id:
+            chat_ids.append(chat_id)
+        if phone:
+            chat_ids.append(f"{phone}@c.us")
+            chat_ids.extend(get_lids_for_phone(phone))
+        if not chat_ids:
+            return
+        cleared = clear_pause_ids(chat_ids)
+        if cleared:
+            logger.info(
+                "AI pause cleared by Chatwoot conversation state: conversation_id=%s chat_ids=%s",
+                conversation_id,
+                chat_ids,
+            )
+
     def _process_conversation_state_event(
         self,
         payload: dict[str, Any],
@@ -1038,12 +1074,14 @@ class ChatwootService:
                 handoff_state="ai",
                 conversation_status=status,
             )
+            self._resume_ai_for_conversation(payload, current, conversation_id)
             return "conversation_pending_ai"
         if status == "resolved":
             self.store.release_conversation(
                 int(conversation_id),
                 conversation_status=status,
             )
+            self._resume_ai_for_conversation(payload, current, conversation_id)
             return "conversation_resolved_ai"
 
         if status in ("open", "snoozed"):

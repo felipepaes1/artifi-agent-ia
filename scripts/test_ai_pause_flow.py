@@ -376,6 +376,8 @@ def patch_webhook_module(tmpdir: str):
     class FakeChatwootService:
         def __init__(self) -> None:
             self.handoff_active: Dict[str, bool] = {}
+            self.synced_incoming: List[Dict[str, Any]] = []
+            self.synced_incoming_media: List[Dict[str, Any]] = []
 
         def is_human_handoff_active(self, chat_id: str) -> bool:
             return self.handoff_active.get(str(chat_id), False)
@@ -390,14 +392,14 @@ def patch_webhook_module(tmpdir: str):
             self.handoff_active[str(kwargs.get("chat_id"))] = True
             return True
 
-        async def sync_incoming_whatsapp_message(self, **_kwargs) -> None:
-            return None
+        async def sync_incoming_whatsapp_message(self, **kwargs) -> None:
+            self.synced_incoming.append(kwargs)
 
         async def sync_outgoing_whatsapp_message(self, **_kwargs) -> None:
             return None
 
-        async def sync_incoming_whatsapp_media(self, **_kwargs) -> None:
-            return None
+        async def sync_incoming_whatsapp_media(self, **kwargs) -> None:
+            self.synced_incoming_media.append(kwargs)
 
         def sync_enabled(self) -> bool:
             return False
@@ -569,6 +571,85 @@ async def test_webhook_clear_pause_resumes_ai(failures: List[str]) -> None:
         )
 
 
+async def test_paused_inbound_still_syncs_to_chatwoot(failures: List[str]) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        webhook_module, sent, agent_runs, fake_chatwoot = patch_webhook_module(tmpdir)
+        store = importlib.import_module("app.services.ai_pause_store")
+        handler = resolve_webhook_handler(webhook_module)
+
+        chat = "5511933332222@c.us"
+        store.pause_chat(chat, ttl_seconds=3600, reason="manual")
+
+        payload = build_message_payload(
+            chat_id=chat, body="Ainda estou esperando retorno", message_id="p-sync"
+        )
+        result = await run_webhook(handler, payload)
+        assert_equal(result.get("ignored"), "ai_paused", "pausa continua suprimindo IA", failures)
+        assert_equal(len(agent_runs), 0, "agent nao roda durante pausa", failures)
+        assert_equal(
+            len(fake_chatwoot.synced_incoming),
+            1,
+            "mensagem do paciente pausado deve sincronizar no Chatwoot",
+            failures,
+        )
+        if fake_chatwoot.synced_incoming:
+            assert_equal(
+                fake_chatwoot.synced_incoming[0].get("content"),
+                "Ainda estou esperando retorno",
+                "conteudo sincronizado confere",
+                failures,
+            )
+
+
+async def test_conversation_resolved_clears_pause(failures: List[str]) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        isolated_state(tmpdir)
+        os.environ["CHATWOOT_BASE_URL"] = ""
+        store = importlib.import_module("app.services.ai_pause_store")
+        state_module = importlib.import_module("app.core.state")
+        chatwoot_module = importlib.import_module("app.chatwoot_integration.service")
+        store_module = importlib.import_module("app.chatwoot_integration.store")
+
+        chat = "554899125132@c.us"
+        lid = "131924232282128@lid"
+        phone = "554899125132"
+        state_module.store_lid_phone(lid, phone)
+        store.pause_chat_ids([chat, lid], ttl_seconds=3600, reason="manual")
+        assert_equal(store.is_chat_paused(chat), True, "chat pausado antes do resolve", failures)
+        assert_equal(store.is_chat_paused(lid), True, "lid pausado antes do resolve", failures)
+
+        service = chatwoot_module.get_chatwoot_service()
+        service.store.upsert_mapping(
+            store_module.ChatwootMapping(
+                whatsapp_chat_id=chat,
+                phone=phone,
+                conversation_id=61,
+                handoff_state="human",
+                conversation_status="open",
+            )
+        )
+
+        result = service._process_conversation_state_event(
+            {"status": "resolved"}, 61, event="conversation_status_changed"
+        )
+        assert_equal(result, "conversation_resolved_ai", "evento processado como resolve", failures)
+        assert_equal(store.is_chat_paused(chat), False, "resolve limpa pausa do chat", failures)
+        assert_equal(store.is_chat_paused(lid), False, "resolve limpa pausa do lid", failures)
+
+        store.pause_chat_ids([chat, lid], ttl_seconds=3600, reason="manual")
+        result2 = service._process_conversation_state_event(
+            {
+                "status": "pending",
+                "meta": {"sender": {"identifier": chat, "phone_number": f"+{phone}"}},
+            },
+            61,
+            event="conversation_status_changed",
+        )
+        assert_equal(result2, "conversation_pending_ai", "evento processado como pending", failures)
+        assert_equal(store.is_chat_paused(chat), False, "pending limpa pausa do chat", failures)
+        assert_equal(store.is_chat_paused(lid), False, "pending limpa pausa do lid", failures)
+
+
 async def test_pause_default_ttl_is_one_day(failures: List[str]) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         isolated_state(tmpdir)
@@ -602,6 +683,8 @@ async def main() -> int:
     await test_webhook_human_message_triggers_pause(failures)
     await test_webhook_bot_echo_does_not_pause(failures)
     await test_webhook_clear_pause_resumes_ai(failures)
+    await test_paused_inbound_still_syncs_to_chatwoot(failures)
+    await test_conversation_resolved_clears_pause(failures)
     await test_pause_default_ttl_is_one_day(failures)
 
     if failures:

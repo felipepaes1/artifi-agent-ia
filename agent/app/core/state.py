@@ -480,6 +480,26 @@ def get_lid_phone(lid: str) -> str:
             pass
 
 
+def get_lids_for_phone(phone: str) -> list:
+    if not phone:
+        return []
+    try:
+        conn = sqlite3.connect(PROFILE_STATE_DB)
+        rows = conn.execute(
+            "SELECT lid FROM lid_phone_map WHERE phone = ?",
+            (str(phone),),
+        ).fetchall()
+        return [str(row[0]) for row in rows if row and row[0]]
+    except Exception as exc:
+        logger.warning("Failed to read LIDs for phone mapping: %s", exc)
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def clear_profile_state(chat_id: str) -> None:
     if not chat_id:
         return

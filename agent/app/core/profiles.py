@@ -10,6 +10,7 @@ from ..config.settings import (
     ARIANE_FIRST_MESSAGE_DELAY_MS,
     ARIANE_MESSAGE_DELAY_MS,
     ARIANE_SCHEDULE_DELAY_MS,
+    BASE_INSTRUCTIONS_PATH,
     CRIOLASER_AUDIO_BUCKET,
     FIRST_MESSAGE_DELAY_MS,
     INSTRUCTIONS_PATH,
@@ -541,6 +542,26 @@ def log_profile_knowledge_status() -> None:
         )
 
 
+def load_base_instructions() -> str:
+    if not BASE_INSTRUCTIONS_PATH:
+        return ""
+    try:
+        with open(BASE_INSTRUCTIONS_PATH, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except FileNotFoundError:
+        logger.warning("Base instructions file not found: %s", BASE_INSTRUCTIONS_PATH)
+    except OSError as exc:
+        logger.warning("Failed to read base instructions file %s: %s", BASE_INSTRUCTIONS_PATH, exc)
+    return ""
+
+
+def prepend_base_instructions(instructions: str) -> str:
+    base = load_base_instructions()
+    if not base:
+        return instructions
+    return f"{base}\n\n{instructions.lstrip()}"
+
+
 def load_instructions() -> str:
     if SYSTEM_PROMPT:
         return SYSTEM_PROMPT
@@ -654,7 +675,10 @@ def append_profile_runtime_instructions(instructions: str, profile_id: Optional[
     return append_audio_tool_instructions(
         append_flow_context_instructions(
             append_tts_audio_reply_instructions(
-                append_response_style_instructions(instructions, profile_id),
+                append_response_style_instructions(
+                    prepend_base_instructions(instructions),
+                    profile_id,
+                ),
                 profile_id,
             ),
             profile_id,
