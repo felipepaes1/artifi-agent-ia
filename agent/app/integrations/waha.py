@@ -29,6 +29,7 @@ from ..config.settings import (
 )
 from ..core.profiles import PROFILE_OPTIONS, PROFILE_POLL_NAME
 from ..core.state import (
+    RECENT_OUTBOUND_CHATS,
     RECENT_OUTBOUND_MESSAGE_IDS,
     RECENT_OUTBOUND_TEXT_KEYS,
     get_lid_phone,
@@ -717,6 +718,14 @@ def outbound_text_key(chat_id: str, text: str) -> str:
     return f"text:{compact_chat_id}:{digest}"
 
 
+def remember_recent_outbound_chat(chat_id: str) -> None:
+    remember_recent_key(
+        RECENT_OUTBOUND_CHATS,
+        str(chat_id or "").strip(),
+        OUTBOUND_ECHO_TTL_SECONDS,
+    )
+
+
 async def set_presence(chat_id: str, presence: str) -> None:
     if not chat_id or not presence or not WAHA_SESSION:
         return
@@ -795,6 +804,7 @@ async def send_text(chat_id: str, text: str, *, preview_seconds: float | None = 
         outbound_text_key(chat_id, text),
         OUTBOUND_ECHO_TTL_SECONDS,
     )
+    remember_recent_outbound_chat(chat_id)
     await show_typing_preview(chat_id, text, preview_seconds)
     url = f"{WAHA_BASE_URL}/api/sendText"
     async with httpx.AsyncClient(timeout=20) as client:
@@ -820,6 +830,7 @@ async def send_voice(chat_id: str, media_url: str, delay_seconds_from_ms) -> str
         raise ValueError("chat_id is required")
     if not media_url:
         raise ValueError("media_url is required")
+    remember_recent_outbound_chat(chat_id)
     parsed_url = urlparse(media_url)
     filename = os.path.basename(parsed_url.path) or "audio.ogg"
     mimetype = guess_waha_file_mimetype(filename)
@@ -865,6 +876,7 @@ async def send_poll(chat_id: str, question: str, options: list[str]) -> Optional
         raise ValueError("chat_id is required")
     if not options:
         raise ValueError("poll options are required")
+    remember_recent_outbound_chat(chat_id)
 
     payload = {
         "chatId": chat_id,
@@ -1074,6 +1086,7 @@ def send_voice_sync(chat_id: str, media_url: str, delay_seconds_from_ms) -> str:
         raise ValueError("chat_id is required")
     if not media_url:
         raise ValueError("media_url is required")
+    remember_recent_outbound_chat(chat_id)
     parsed_url = urlparse(media_url)
     filename = os.path.basename(parsed_url.path) or "audio.ogg"
     mimetype = guess_waha_file_mimetype(filename)

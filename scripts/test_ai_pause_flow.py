@@ -534,6 +534,76 @@ async def test_webhook_bot_echo_does_not_pause(failures: List[str]) -> None:
         )
 
 
+async def test_webhook_bot_audio_echo_does_not_pause(failures: List[str]) -> None:
+    import time
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        webhook_module, sent, agent_runs, _ = patch_webhook_module(tmpdir)
+        store = importlib.import_module("app.services.ai_pause_store")
+        handler = resolve_webhook_handler(webhook_module)
+
+        from app.integrations.waha import remember_recent_outbound_chat
+
+        chat = "5511922221111@c.us"
+        remember_recent_outbound_chat(chat)
+
+        payload_audio_echo = {
+            "event": "message",
+            "payload": {
+                "id": "ECHO-AUDIO-NEW-ID",
+                "from": chat,
+                "fromMe": True,
+                "body": "",
+                "type": "ptt",
+                "timestamp": time.time(),
+            },
+        }
+        result = await run_webhook(handler, payload_audio_echo)
+        assert_equal(
+            result.get("ignored"),
+            "outbound_echo_media",
+            "eco de audio/midia do bot deve ser ignorado, nao pausar",
+            failures,
+        )
+        assert_equal(
+            store.is_chat_paused(chat),
+            False,
+            "eco de audio do bot NAO pode disparar pausa",
+            failures,
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        webhook_module, sent, agent_runs, _ = patch_webhook_module(tmpdir)
+        store = importlib.import_module("app.services.ai_pause_store")
+        handler = resolve_webhook_handler(webhook_module)
+
+        chat = "5511911112222@c.us"
+        payload_manual_media = {
+            "event": "message",
+            "payload": {
+                "id": "MANUAL-MEDIA-1",
+                "from": chat,
+                "fromMe": True,
+                "body": "",
+                "type": "ptt",
+                "timestamp": time.time(),
+            },
+        }
+        result = await run_webhook(handler, payload_manual_media)
+        assert_equal(
+            result.get("handoff"),
+            "manual_whatsapp_from_me",
+            "midia manual sem envio recente do bot deve pausar (atendente assumiu)",
+            failures,
+        )
+        assert_equal(
+            store.is_chat_paused(chat),
+            True,
+            "midia manual real deve pausar o chat",
+            failures,
+        )
+
+
 async def test_webhook_clear_pause_resumes_ai(failures: List[str]) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         webhook_module, sent, agent_runs, _ = patch_webhook_module(tmpdir)
@@ -682,6 +752,7 @@ async def main() -> int:
 
     await test_webhook_human_message_triggers_pause(failures)
     await test_webhook_bot_echo_does_not_pause(failures)
+    await test_webhook_bot_audio_echo_does_not_pause(failures)
     await test_webhook_clear_pause_resumes_ai(failures)
     await test_paused_inbound_still_syncs_to_chatwoot(failures)
     await test_conversation_resolved_clears_pause(failures)
