@@ -93,7 +93,7 @@ from ..services.agent_service import (
     extract_text_from_result,
     get_agent,
     log_empty_output_diagnostics,
-    run_agent,
+    run_agent_with_empty_output_retry,
 )
 from ..services.ai_pause_store import (
     any_chat_paused,
@@ -436,7 +436,7 @@ async def handle_poll_vote(data: Dict[str, Any]) -> Dict[str, Any]:
         else:
             result = None
             try:
-                result = await run_agent(agent, pending_message, session, str(chat_id), profile_id)
+                result = await run_agent_with_empty_output_retry(agent, pending_message, session, str(chat_id), profile_id)
                 reply = truncate(
                     sanitize_plain_text(extract_text_from_result(result), profile_id),
                     profile_id,
@@ -1082,7 +1082,7 @@ def build_waha_router() -> APIRouter:
                 result = None
                 try:
                     agent = get_agent(profile_id)
-                    result = await run_agent(agent, body, session, str(chat_id), profile_id)
+                    result = await run_agent_with_empty_output_retry(agent, body, session, str(chat_id), profile_id)
                     reply = truncate(
                         sanitize_plain_text(extract_text_from_result(result), profile_id),
                         profile_id,
@@ -1266,7 +1266,7 @@ def build_waha_router() -> APIRouter:
             result = None
             try:
                 agent = get_agent(profile_id)
-                result = await run_agent(agent, body, session, str(chat_id), profile_id)
+                result = await run_agent_with_empty_output_retry(agent, body, session, str(chat_id), profile_id)
                 reply = truncate(
                     sanitize_plain_text(extract_text_from_result(result), profile_id),
                     profile_id,

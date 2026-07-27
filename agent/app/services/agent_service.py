@@ -130,15 +130,34 @@ def log_empty_output_diagnostics(result: Any, context: str) -> None:
         last_response = raw_responses[-1]
         output_items = getattr(last_response, "output", None) or []
         output_types = [getattr(item, "type", item.__class__.__name__) for item in output_items]
+        incomplete_details = getattr(last_response, "incomplete_details", None)
+        error = getattr(last_response, "error", None)
+        usage = getattr(last_response, "usage", None)
         logger.warning(
-            "Agent returned empty output (%s): response_id=%s output_types=%s output_items=%s",
+            "Agent returned empty output (%s): response_id=%s status=%s incomplete_reason=%s "
+            "error=%s usage=%s output_types=%s output_items=%s",
             context,
             getattr(last_response, "response_id", None),
+            getattr(last_response, "status", None),
+            getattr(incomplete_details, "reason", None),
+            error,
+            usage,
             output_types,
             len(output_items),
         )
     except Exception as exc:
         logger.warning("Failed to build empty output diagnostics (%s): %s", context, exc)
+
+
+def result_contains_tool_call(result: Any) -> bool:
+    """Returns whether a completed run invoked a side-effect-capable tool."""
+    raw_responses = getattr(result, "raw_responses", None) or []
+    for raw_response in raw_responses:
+        for item in getattr(raw_response, "output", None) or []:
+            item_type = str(getattr(item, "type", "")).lower()
+            if item_type in {"function_call", "computer_call", "mcp_call", "tool_call"}:
+                return True
+    return False
 
 
 def build_tools_for_profile(profile_id: Optional[str]) -> list[Any]:
@@ -237,3 +256,27 @@ async def run_agent(
         CURRENT_USER_INPUT.reset(input_token)
         CURRENT_PROFILE_ID.reset(profile_token)
         CURRENT_CHAT_ID.reset(chat_token)
+
+
+async def run_agent_with_empty_output_retry(
+    agent: Agent,
+    input_text: str,
+    session,
+    chat_id: str,
+    profile_id: Optional[str] = None,
+) -> Any:
+    """Retries a provider's textless response once when no tool was called.
+
+    Retrying after a tool call could repeat a booking, handoff, or media send.
+    Those runs are left untouched and diagnosed by the caller instead.
+    """
+    result = await run_agent(agent, input_text, session, chat_id, profile_id)
+    if extract_text_from_result(result) or result_contains_tool_call(result):
+        return result
+
+    logger.warning(
+        "Retrying agent run after empty output without tool call: profile=%s chat_id=%s",
+        profile_id or "",
+        chat_id,
+    )
+    return await run_agent(agent, input_text, session, chat_id, profile_id)

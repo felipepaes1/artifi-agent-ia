@@ -14,7 +14,7 @@ from ..services.agent_service import (
     extract_text_from_result,
     get_agent,
     log_empty_output_diagnostics,
-    run_agent,
+    run_agent_with_empty_output_retry,
 )
 from ..services.guardrail_service import enforce_scheduling_entity_guardrail
 from ..services.scheduling_service import inject_fake_schedule
@@ -90,7 +90,7 @@ def build_chat_router() -> APIRouter:
 
         agent = get_agent(profile_id)
         try:
-            result = await run_agent(agent, message, session, session_id, profile_id)
+            result = await run_agent_with_empty_output_retry(agent, message, session, session_id, profile_id)
             reply = truncate(
                 sanitize_plain_text(extract_text_from_result(result), profile_id),
                 profile_id,

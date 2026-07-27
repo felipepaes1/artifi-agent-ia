@@ -10,6 +10,7 @@ from ..config.settings import (
     ARIANE_FIRST_MESSAGE_DELAY_MS,
     ARIANE_MESSAGE_DELAY_MS,
     ARIANE_SCHEDULE_DELAY_MS,
+    BASE_INSTRUCTIONS_ENABLED,
     BASE_INSTRUCTIONS_PATH,
     CRIOLASER_AUDIO_BUCKET,
     FIRST_MESSAGE_DELAY_MS,
@@ -543,7 +544,7 @@ def log_profile_knowledge_status() -> None:
 
 
 def load_base_instructions() -> str:
-    if not BASE_INSTRUCTIONS_PATH:
+    if not BASE_INSTRUCTIONS_ENABLED or not BASE_INSTRUCTIONS_PATH:
         return ""
     try:
         with open(BASE_INSTRUCTIONS_PATH, "r", encoding="utf-8") as handle:
