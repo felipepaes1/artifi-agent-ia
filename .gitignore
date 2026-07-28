@@ -68,6 +68,12 @@ docker-compose.override.yml
 *.db
 *.sqlite
 *.sqlite3
+
+# Dados pessoais e configuracao local do disparador Biovita
+disparos_biovita/input.manual.json
+disparos_biovita/active-conversations.json
+disparos_biovita/message.txt
+disparos_biovita/.runtime/
 EOF
 
 # Frontend/package managers, if they appear later

@@ -1,0 +1,61 @@
+{
+  "success": true,
+  "count": 5,
+  "data": [
+    {
+      "CD_SMS": "TESTE-001",
+      "CD_PACIENTE": 1,
+      "NM_PACIENTE": "SUBSTITUA PELO NOME 1",
+      "NU_CELULAR": "(00)000000000",
+      "CD_POSTO": null,
+      "CD_REQUISICAO": null,
+      "ID_TIPO": "A",
+      "DT_INC_INF": "2026-07-29T09:00:00.000Z",
+      "BO_ENVIADO": false
+    },
+    {
+      "CD_SMS": "TESTE-002",
+      "CD_PACIENTE": 2,
+      "NM_PACIENTE": "SUBSTITUA PELO NOME 2",
+      "NU_CELULAR": "(00)000000000",
+      "CD_POSTO": null,
+      "CD_REQUISICAO": null,
+      "ID_TIPO": "A",
+      "DT_INC_INF": "2026-07-29T09:00:00.000Z",
+      "BO_ENVIADO": false
+    },
+    {
+      "CD_SMS": "TESTE-003",
+      "CD_PACIENTE": 3,
+      "NM_PACIENTE": "SUBSTITUA PELO NOME 3",
+      "NU_CELULAR": "(00)000000000",
+      "CD_POSTO": null,
+      "CD_REQUISICAO": null,
+      "ID_TIPO": "A",
+      "DT_INC_INF": "2026-07-29T09:00:00.000Z",
+      "BO_ENVIADO": false
+    },
+    {
+      "CD_SMS": "TESTE-004",
+      "CD_PACIENTE": 4,
+      "NM_PACIENTE": "SUBSTITUA PELO NOME 4",
+      "NU_CELULAR": "(00)000000000",
+      "CD_POSTO": null,
+      "CD_REQUISICAO": null,
+      "ID_TIPO": "A",
+      "DT_INC_INF": "2026-07-29T09:00:00.000Z",
+      "BO_ENVIADO": false
+    },
+    {
+      "CD_SMS": "TESTE-005",
+      "CD_PACIENTE": 5,
+      "NM_PACIENTE": "SUBSTITUA PELO NOME 5",
+      "NU_CELULAR": "(00)000000000",
+      "CD_POSTO": null,
+      "CD_REQUISICAO": null,
+      "ID_TIPO": "A",
+      "DT_INC_INF": "2026-07-29T09:00:00.000Z",
+      "BO_ENVIADO": false
+    }
+  ]
+}

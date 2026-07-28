@@ -181,6 +181,31 @@ services:
       - internal
       - proxy
 
+  # Executado somente sob demanda via `docker compose --profile manual run`.
+  # Mantem os disparos Biovita fora do agent, Chatwoot e dos webhooks WAHA.
+  biovita-sender:
+    image: node:22-alpine
+    profiles: ["manual"]
+    working_dir: /app
+    volumes:
+      - ./disparos_biovita:/app:ro
+      - ./storage/biovita_sender:/data
+    environment:
+      - TZ=America/Sao_Paulo
+      - BIOVITA_DATA_DIR=/data
+      - BIOVITA_WAHA_BASE_URL=http://waha:3000
+      - BIOVITA_WAHA_API_KEY=${WAHA_API_KEY_PLAIN}
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - BIOVITA_WAHA_SESSION=${BIOVITA_WAHA_SESSION:-biovita-disparos}
+      - BITLAB_API_KEY=${BITLAB_API_KEY}
+      - BIOVITA_BATCH_LIMIT=${BIOVITA_BATCH_LIMIT:-20}
+      - BIOVITA_MIN_DELAY_MS=${BIOVITA_MIN_DELAY_MS:-15000}
+      - BIOVITA_MAX_DELAY_MS=${BIOVITA_MAX_DELAY_MS:-30000}
+    depends_on:
+      - waha
+    networks:
+      - internal
+
 networks:
   proxy:
   internal:
