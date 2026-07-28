@@ -30,6 +30,13 @@ function fail(message) {
   throw error;
 }
 
+function describeNetworkError(error) {
+  const details = [error?.message, error?.cause?.code, error?.cause?.message]
+    .filter(Boolean)
+    .map(String);
+  return [...new Set(details)].join(" | ") || "erro de rede desconhecido";
+}
+
 function parseBoolean(value) {
   return ["1", "true", "yes", "sim"].includes(String(value || "").trim().toLowerCase());
 }
@@ -285,15 +292,22 @@ async function withDailyLock(dataDir, targetDate, callback) {
 }
 
 async function sendTextWithWaha({ baseUrl, apiKey, session, chatId, text, fetchImpl = fetch }) {
-  const response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/sendText`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Api-Key": apiKey,
-    },
-    body: JSON.stringify({ chatId, text, session }),
-    signal: AbortSignal.timeout(30000),
-  });
+  const endpoint = `${baseUrl.replace(/\/$/, "")}/api/sendText`;
+  let response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": apiKey,
+      },
+      body: JSON.stringify({ chatId, text, session }),
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (error) {
+    fail(`Falha ao conectar no WAHA (${baseUrl}): ${describeNetworkError(error)}`);
+  }
+
   const responseText = await response.text();
   if (!response.ok) {
     throw new Error(`WAHA respondeu HTTP ${response.status}: ${responseText.slice(0, 300)}`);
@@ -393,10 +407,16 @@ async function requestApiPayload(options, fetchImpl = fetch) {
   url.searchParams.set("status", "pendente");
   const apiLimitParam = options.apiLimitParam || "limit";
   url.searchParams.set(apiLimitParam, String(options.limit));
-  const response = await fetchImpl(url, {
-    headers: { "X-API-KEY": options.apiKey, Accept: "application/json" },
-    signal: AbortSignal.timeout(30000),
-  });
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      headers: { "X-API-KEY": options.apiKey, Accept: "application/json" },
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (error) {
+    fail(`Falha ao conectar na API Bitlab (${url.hostname}): ${describeNetworkError(error)}`);
+  }
+
   const text = await response.text();
   if (!response.ok) fail(`API Biovita respondeu HTTP ${response.status}: ${text.slice(0, 300)}`);
   let payload;
