@@ -44,8 +44,6 @@ services:
       - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
       - WAHA_APPS_ENABLED=${WAHA_APPS_ENABLED:-False}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - WHATSAPP_HOOK_URL=http://agent:8000/webhook/waha
-      - WHATSAPP_HOOK_EVENTS=${WHATSAPP_HOOK_EVENTS}
     depends_on:
       - redis
     networks:
@@ -196,7 +194,7 @@ services:
       - BIOVITA_WAHA_BASE_URL=http://waha:3000
       - BIOVITA_WAHA_API_KEY=${WAHA_API_KEY_PLAIN}
       - WAHA_API_KEY=${WAHA_API_KEY}
-      - BIOVITA_WAHA_SESSION=${BIOVITA_WAHA_SESSION:-biovita-disparos}
+      - BIOVITA_WAHA_SESSION=${BIOVITA_WAHA_SESSION:-biovita_disparos}
       - BITLAB_API_KEY=${BITLAB_API_KEY}
       - BIOVITA_BATCH_LIMIT=${BIOVITA_BATCH_LIMIT:-20}
       - BIOVITA_MIN_DELAY_MS=${BIOVITA_MIN_DELAY_MS:-15000}
