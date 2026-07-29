@@ -38,7 +38,7 @@ services:
     environment:
       # NOWEB: engine nativo (Baileys), sem Chromium. Reduz drasticamente CPU/RAM
       # vs WEBJS. Trocar de engine exige re-parear (escanear QR) as sessoes.
-      - WHATSAPP_DEFAULT_ENGINE=${WHATSAPP_DEFAULT_ENGINE:-NOWEB}
+      - WHATSAPP_DEFAULT_ENGINE=${WHATSAPP_DEFAULT_ENGINE:-WEBJS}
       - WAHA_API_KEY=${WAHA_API_KEY}
       - WAHA_API_KEY_PLAIN=${WAHA_API_KEY_PLAIN}
       - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME}
