@@ -32,7 +32,8 @@ services:
     image: devlikeapro/waha:latest
     container_name: waha
     volumes:
-      - ./volumes/waha_data:/home/node/.waha
+      # WAHA persists its SQLite metadata and session credentials here.
+      - ./volumes/waha_sessions:/app/.sessions
     restart: unless-stopped
     environment:
       # NOWEB: engine nativo (Baileys), sem Chromium. Reduz drasticamente CPU/RAM
