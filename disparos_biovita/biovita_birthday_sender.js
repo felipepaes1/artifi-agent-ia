@@ -321,6 +321,42 @@ async function sendTextWithWaha({ baseUrl, apiKey, session, chatId, text, fetchI
   }
 }
 
+function isWahaChatId(value) {
+  return /^\d+@(c\.us|lid)$/.test(String(value || ""));
+}
+
+async function checkRecipientWithWaha({ baseUrl, apiKey, session, phone, fetchImpl = fetch }) {
+  const url = new URL(`${baseUrl.replace(/\/$/, "")}/api/contacts/check-exists`);
+  url.searchParams.set("phone", phone);
+  url.searchParams.set("session", session);
+
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      headers: { "X-Api-Key": apiKey },
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (error) {
+    throw new Error(`Falha ao consultar o contato no WAHA: ${describeNetworkError(error)}`);
+  }
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`WAHA respondeu HTTP ${response.status} ao consultar o contato: ${responseText.slice(0, 300)}`);
+  }
+
+  try {
+    const responseJson = JSON.parse(responseText);
+    if (!responseJson?.numberExists) return { numberExists: false, chatId: "" };
+    return {
+      numberExists: true,
+      chatId: isWahaChatId(responseJson.chatId) ? responseJson.chatId : "",
+    };
+  } catch {
+    throw new Error("WAHA retornou uma consulta de contato sem JSON valido.");
+  }
+}
+
 function parseArguments(argv, env = process.env) {
   const args = [...argv];
   const options = {
@@ -335,7 +371,7 @@ function parseArguments(argv, env = process.env) {
     messageFile: env.BIOVITA_MESSAGE_FILE || "",
     blocklist: env.BIOVITA_BLOCKLIST_FILE || "",
     dataDir: env.BIOVITA_DATA_DIR || path.join(process.cwd(), ".runtime"),
-    session: env.BIOVITA_WAHA_SESSION || "biovita-disparos",
+    session: env.BIOVITA_WAHA_SESSION || "biovita_disparos",
     wahaBaseUrl: env.BIOVITA_WAHA_BASE_URL || "http://waha:3000",
     wahaApiKey: env.BIOVITA_WAHA_API_KEY || env.WAHA_API_KEY || "",
     apiKey: env.BITLAB_API_KEY || env.BIOVITA_API_KEY || "",
@@ -521,6 +557,28 @@ async function run(options, dependencies = {}) {
     for (let index = 0; index < candidates.length; index += 1) {
       const recipient = candidates[index];
       const text = renderMessage(template, recipient.name);
+
+      let chatId = recipient.phone.chatId;
+      try {
+        const contact = await checkRecipientWithWaha({
+          baseUrl: options.wahaBaseUrl,
+          apiKey: options.wahaApiKey,
+          session: options.session,
+          phone: recipient.phone.e164,
+          fetchImpl,
+        });
+        if (!contact.numberExists) {
+          report.skipped.push(recipientResult(recipient, "skipped", "nao_registrado_no_whatsapp"));
+          continue;
+        }
+        if (contact.chatId) chatId = contact.chatId;
+      } catch (error) {
+        report.results.push(recipientResult(recipient, "uncertain", "falha_na_validacao_no_waha", {
+          error: String(error.message || error).slice(0, 300),
+        }));
+        continue;
+      }
+
       const attemptedAt = new Date().toISOString();
 
       // Persist before the request. A timeout may still have delivered the message,
@@ -537,7 +595,7 @@ async function run(options, dependencies = {}) {
           baseUrl: options.wahaBaseUrl,
           apiKey: options.wahaApiKey,
           session: options.session,
-          chatId: recipient.phone.chatId,
+          chatId,
           text,
           fetchImpl,
         });
@@ -557,7 +615,9 @@ async function run(options, dependencies = {}) {
           error: String(error.message || error).slice(0, 300),
         };
         writeJsonAtomic(ledgerPath, ledger);
-        report.results.push(recipientResult(recipient, "uncertain", "falha_sem_retentativa_automatica"));
+        report.results.push(recipientResult(recipient, "uncertain", "falha_sem_retentativa_automatica", {
+          error: String(error.message || error).slice(0, 300),
+        }));
       }
 
       if (index < candidates.length - 1) {

@@ -118,7 +118,12 @@ test("envia somente numeros existentes no JSON e nunca repete no mesmo dia", asy
     record({ id: "3", name: "BRUNO", phone: "(48) 98888-3333" }),
   ]);
   const requests = [];
-  const fetchImpl = async (_url, request) => {
+  const fetchImpl = async (url, request = {}) => {
+    const parsedUrl = new URL(String(url));
+    if (parsedUrl.pathname === "/api/contacts/check-exists") {
+      const phone = parsedUrl.searchParams.get("phone");
+      return new Response(JSON.stringify({ numberExists: true, chatId: `${phone}@c.us` }), { status: 200 });
+    }
     requests.push(JSON.parse(request.body));
     return new Response(JSON.stringify({ id: `message-${requests.length}` }), { status: 200 });
   };
@@ -141,6 +146,45 @@ test("envia somente numeros existentes no JSON e nunca repete no mesmo dia", asy
   assert.ok(requests.every((request) => request.session === "default"));
 });
 
+test("consulta o WAHA antes do envio e usa o chatId LID resolvido", async () => {
+  const files = fixture([
+    record({ id: "1", name: "Ana", phone: "(48) 98888-1111" }),
+  ]);
+  const requests = [];
+  const fetchImpl = async (url, request = {}) => {
+    const parsedUrl = new URL(String(url));
+    if (parsedUrl.pathname === "/api/contacts/check-exists") {
+      assert.equal(parsedUrl.searchParams.get("phone"), "5548988881111");
+      assert.equal(parsedUrl.searchParams.get("session"), "default");
+      return new Response(JSON.stringify({ numberExists: true, chatId: "123456789@lid" }), { status: 200 });
+    }
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ id: "message-1" }), { status: 200 });
+  };
+
+  const report = await run(optionsFrom(files), { fetchImpl, sleepImpl: async () => {} });
+
+  assert.equal(report.results[0].status, "sent");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].chatId, "123456789@lid");
+});
+
+test("nao grava ledger nem envia quando WAHA informa que o numero nao existe", async () => {
+  const files = fixture([
+    record({ id: "1", name: "Ana", phone: "(48) 98888-1111" }),
+  ]);
+  const fetchImpl = async (url) => {
+    assert.match(String(url), /\/api\/contacts\/check-exists/);
+    return new Response(JSON.stringify({ numberExists: false }), { status: 200 });
+  };
+
+  const report = await run(optionsFrom(files), { fetchImpl, sleepImpl: async () => {} });
+
+  assert.equal(report.results.length, 0);
+  assert.equal(report.skipped.filter((item) => item.reason === "nao_registrado_no_whatsapp").length, 1);
+  assert.equal(fs.existsSync(path.join(files.dataDir, "ledger", `${DATE}.json`)), false);
+});
+
 test("dry-run nao grava idempotencia e respeita o limite", async () => {
   const files = fixture([
     record({ id: "1", name: "Ana", phone: "(48) 98888-1111" }),
@@ -161,6 +205,10 @@ test("permite validacao limitada mesmo que a API retorne mais registros quando h
   ];
   const requests = [];
   const fetchImpl = async (url, request = {}) => {
+    if (String(url).includes("/api/contacts/check-exists")) {
+      const phone = new URL(String(url)).searchParams.get("phone");
+      return new Response(JSON.stringify({ numberExists: true, chatId: `${phone}@c.us` }), { status: 200 });
+    }
     if (request.method === "POST") {
       requests.push(JSON.parse(request.body));
       return new Response(JSON.stringify({ id: "message-1" }), { status: 200 });
